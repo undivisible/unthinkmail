@@ -7,12 +7,12 @@ tailwind.config = {
   theme: {
     extend: {
       colors: {
-        surface: '#050505',
-        border:  '#141414',
-        muted:   '#1a1a1a',
-        dim:     '#2a2a2a',
-        sub:     '#444',
-        body:    '#d0d0d0',
+        surface: '#0e0e0e',
+        border:  '#1e1e1e',
+        muted:   '#2a2a2a',
+        dim:     '#3d3d3d',
+        sub:     '#686868',
+        body:    '#e2e2e2',
       },
       fontFamily: {
         mono: ["'SF Mono'", 'Monaco', 'monospace'],
@@ -30,9 +30,18 @@ const HEAD = (title) => `
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"><\/script>
 <style>
   [x-cloak]{display:none!important}
-  input:-webkit-autofill{-webkit-text-fill-color:#d0d0d0!important;-webkit-box-shadow:0 0 0 1000px #080808 inset!important}
+  input:-webkit-autofill{-webkit-text-fill-color:#e2e2e2!important;-webkit-box-shadow:0 0 0 1000px #0e0e0e inset!important}
   pre{font-family:'SF Mono',Monaco,monospace;white-space:pre-wrap;word-break:break-all}
 </style>`;
+
+const FOOTER_LINKS = `
+  <div class="mt-16 text-xs text-dim space-x-3 text-center">
+    <a href="https://undivisible.dev" class="hover:text-sub transition-colors">undivisible.dev</a>
+    <span class="text-border">·</span>
+    <a href="https://buymeacoffee.com/undivisible" class="hover:text-sub transition-colors">donate</a>
+    <span class="text-border">·</span>
+    <a href="https://github.com/undivisible/unthinkmail" class="hover:text-sub transition-colors">source</a>
+  </div>`;
 
 export const LANDING = `<!DOCTYPE html>
 <html lang="en" class="dark bg-black">
@@ -40,24 +49,25 @@ export const LANDING = `<!DOCTYPE html>
 <body class="bg-black text-body min-h-screen flex items-center justify-center">
 <div class="max-w-lg w-full mx-auto px-6 py-16 text-center">
   <h1 class="text-4xl font-thin tracking-tight text-white mb-1">unthinkmail</h1>
-  <p class="text-sub text-sm mb-8">connect any email to any ai via imap</p>
+  <p class="text-sub text-sm mb-3">give your ai access to your email inbox</p>
+  <p class="text-dim text-xs mb-8 max-w-sm mx-auto leading-relaxed">unthinkmail connects to your existing email account over imap and exposes it as an mcp server — so any ai client can read, search, and manage your mail as a native tool.</p>
 
   <div class="grid grid-cols-2 gap-3 mb-8 text-left">
     <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">any provider</p>
-      <p class="text-sub text-xs">gmail, outlook, fastmail, purelymail — if it speaks imap, it works.</p>
+      <p class="text-xs uppercase tracking-widest text-dim mb-2">your inbox, as tools</p>
+      <p class="text-sub text-xs">your ai can search mail, read threads, move messages, and delete — without you copy-pasting anything.</p>
     </div>
     <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">mcp protocol</p>
-      <p class="text-sub text-xs">expose your inbox as tools for any ai. search, read, compose, send.</p>
+      <p class="text-xs uppercase tracking-widest text-dim mb-2">any imap provider</p>
+      <p class="text-sub text-xs">gmail, outlook, fastmail, purelymail — if it speaks imap, it works. no special setup required.</p>
     </div>
     <div class="bg-surface border border-border rounded-lg p-4">
       <p class="text-xs uppercase tracking-widest text-dim mb-2">no accounts</p>
-      <p class="text-sub text-xs">enter your imap credentials, get an encrypted key. nothing stored server-side.</p>
+      <p class="text-sub text-xs">enter your imap credentials once, get an encrypted key. nothing is stored. same credentials → same key, always.</p>
     </div>
     <div class="bg-surface border border-border rounded-lg p-4">
       <p class="text-xs uppercase tracking-widest text-dim mb-2">open source</p>
-      <p class="text-sub text-xs">workers + zig. unlimited users, no seat limits, no vendor lock-in.</p>
+      <p class="text-sub text-xs">workers + zig. self-hostable, no seat limits, no vendor lock-in. inspect the code yourself.</p>
     </div>
   </div>
 
@@ -65,11 +75,7 @@ export const LANDING = `<!DOCTYPE html>
     get your key
   </a>
 
-  <div class="mt-16 text-xs text-muted space-x-3">
-    <a href="https://buymeacoffee.com/undivisible" class="hover:text-sub transition-colors">buy me a coffee</a>
-    <span class="text-border">·</span>
-    <a href="https://github.com/undivisible/unthinkmail" class="hover:text-sub transition-colors">source</a>
-  </div>
+  ${FOOTER_LINKS}
 </div>
 </body>
 </html>`;
@@ -87,6 +93,7 @@ function hub() {
     key: null,
     error: null,
     copied: false,
+    showAbout: false,
 
     // Pre-fill smtp host when imap host changes
     imapHostChanged() {
@@ -151,6 +158,49 @@ function hub() {
   };
 }`;
 
+const ABOUT_SECTION = `
+  <!-- About / Setup instructions -->
+  <div class="mt-6">
+    <button @click="showAbout = !showAbout"
+      class="w-full text-xs text-dim border border-border rounded-md py-2 hover:text-sub hover:border-dim transition-colors flex items-center justify-center gap-2">
+      <span x-text="showAbout ? 'hide setup guide' : 'how to connect to your ai'"></span>
+      <span x-text="showAbout ? '↑' : '↓'" class="text-muted"></span>
+    </button>
+
+    <div x-show="showAbout" x-transition class="mt-3 bg-surface border border-border rounded-lg p-5 space-y-4 text-xs text-sub">
+      <div>
+        <p class="text-body text-xs font-medium mb-1">1. get your key</p>
+        <p class="text-dim">enter your imap credentials above and click generate. the same credentials always produce the same key — enter them again any time to recover it. nothing is stored on our side.</p>
+      </div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">2. configure your ai client</p>
+        <p class="text-dim mb-2">your ai client needs two things:</p>
+        <div class="bg-black rounded-md p-3 space-y-1 font-mono">
+          <p><span class="text-dim">endpoint</span>  <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span></p>
+          <p><span class="text-dim">auth     </span>  <span class="text-sub">Bearer &lt;your key&gt;</span></p>
+        </div>
+        <p class="text-dim mt-2">look for "mcp servers", "tools", or "integrations" in your ai app's settings. paste the endpoint and set the authorization header.</p>
+      </div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">3. what the ai can do</p>
+        <ul class="text-dim space-y-0.5 list-disc list-inside">
+          <li>list your mail folders</li>
+          <li>search messages by keyword, sender, date</li>
+          <li>read full message content</li>
+          <li>move messages between folders</li>
+          <li>delete messages</li>
+        </ul>
+      </div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">security</p>
+        <p class="text-dim">your key is your credentials, aes-256 encrypted. the server decrypts them per-request — nothing is stored. use an app-specific password if your provider supports it (gmail, outlook, fastmail all do). to revoke access, just disable the app password at your email provider.</p>
+      </div>
+    </div>
+  </div>`;
+
 export const HUB = `<!DOCTYPE html>
 <html lang="en" class="dark bg-black">
 <head>${HEAD('unthinkmail')}</head>
@@ -169,7 +219,7 @@ export const HUB = `<!DOCTYPE html>
     <span class="text-xs text-dim self-center">quick fill:</span>
     <template x-for="p in ['purelymail','gmail','outlook','fastmail']">
       <button @click="preset(p)"
-        class="text-xs border border-border text-muted px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
+        class="text-xs border border-border text-dim px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
         x-text="p"></button>
     </template>
   </div>
@@ -216,7 +266,7 @@ export const HUB = `<!DOCTYPE html>
         class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted">
     </div>
 
-    <div x-show="error" class="text-xs text-red-700 py-1" x-text="error"></div>
+    <div x-show="error" class="text-xs text-red-600 py-1" x-text="error"></div>
 
     <button @click="generate()" :disabled="loading"
       class="w-full bg-surface border border-dim text-sub text-xs rounded-md py-2.5 hover:text-white hover:border-sub transition-colors disabled:opacity-40">
@@ -226,21 +276,21 @@ export const HUB = `<!DOCTYPE html>
 
   <!-- Key output -->
   <div x-show="key" class="mt-4">
-    <div class="bg-green-950/10 border border-green-950/60 rounded-lg p-4">
+    <div class="bg-green-950/10 border border-green-900/30 rounded-lg p-4">
       <div class="flex justify-between items-center mb-2">
-        <span class="text-xs text-green-800">your api key — save this somewhere safe</span>
+        <span class="text-xs text-green-700">your api key — save this somewhere safe</span>
         <button @click="copy(key)"
-          class="text-xs border border-green-950 text-green-900 px-3 py-1 rounded hover:text-green-600 transition-colors"
+          class="text-xs border border-green-900/40 text-green-800 px-3 py-1 rounded hover:text-green-500 transition-colors"
           x-text="copied ? 'copied!' : 'copy'"></button>
       </div>
-      <pre class="text-green-900 text-xs break-all" x-text="key"></pre>
+      <pre class="text-green-700 text-xs break-all" x-text="key"></pre>
     </div>
 
     <div class="mt-4 space-y-3">
       <div class="bg-surface border border-border rounded-lg p-4">
         <div class="flex justify-between items-center mb-2">
           <p class="text-xs text-dim uppercase tracking-widest">claude desktop / claude code</p>
-          <button @click="copy(claudeCfg)" class="text-xs border border-border text-muted px-2 py-1 rounded hover:text-body transition-colors">copy</button>
+          <button @click="copy(claudeCfg)" class="text-xs border border-border text-dim px-2 py-1 rounded hover:text-body transition-colors">copy</button>
         </div>
         <pre class="text-sub text-xs" x-text="claudeCfg"></pre>
       </div>
@@ -249,13 +299,17 @@ export const HUB = `<!DOCTYPE html>
         <p class="text-xs text-dim uppercase tracking-widest mb-2">endpoint</p>
         <div class="flex justify-between items-center">
           <pre class="text-sub text-xs" x-text="endpoint"></pre>
-          <button @click="copy(endpoint)" class="text-xs border border-border text-muted px-2 py-1 rounded hover:text-body transition-colors ml-3">copy</button>
+          <button @click="copy(endpoint)" class="text-xs border border-border text-dim px-2 py-1 rounded hover:text-body transition-colors ml-3">copy</button>
         </div>
       </div>
 
-      <p class="text-xs text-muted">same credentials always produce the same key. re-enter them here any time to recover it.</p>
+      <p class="text-xs text-dim">same credentials always produce the same key. re-enter them here any time to recover it.</p>
     </div>
   </div>
+
+  ${ABOUT_SECTION}
+
+  ${FOOTER_LINKS}
 
 </div>
 </body>

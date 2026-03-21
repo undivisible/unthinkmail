@@ -71,6 +71,34 @@ fn handleConn(allocator: mem.Allocator, conn: net.Server.Connection, state: *Ser
             else => return err,
         };
 
+        // MCP clients sometimes probe with GET — return server info
+        if (request.head.method == .GET) {
+            try request.respond(
+                \\{"name":"unthinkmail","version":"1.0.0","protocolVersion":"2024-11-05"}
+            , .{
+                .status = .ok,
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "application/json" },
+                    .{ .name = "access-control-allow-origin", .value = "*" },
+                },
+            });
+            if (!request.head.keep_alive) break;
+            continue;
+        }
+
+        if (request.head.method == .OPTIONS) {
+            try request.respond("", .{
+                .status = .no_content,
+                .extra_headers = &.{
+                    .{ .name = "access-control-allow-origin", .value = "*" },
+                    .{ .name = "access-control-allow-methods", .value = "GET, POST, OPTIONS" },
+                    .{ .name = "access-control-allow-headers", .value = "Content-Type, Authorization" },
+                },
+            });
+            if (!request.head.keep_alive) break;
+            continue;
+        }
+
         if (request.head.method != .POST) {
             try request.respond("Method Not Allowed", .{ .status = .method_not_allowed });
             continue;
@@ -137,11 +165,19 @@ fn handleRpc(allocator: mem.Allocator, body: []const u8, state: *ServerState) ![
         };
     }
 
+    // Notifications have no id — acknowledge with empty object, no response body needed
+    // but since we're HTTP we must return something
+    if (mem.startsWith(u8, method, "notifications/")) {
+        return allocator.dupe(u8, "{}");
+    }
+
     if (mem.eql(u8, method, "initialize")) {
-        // MCP protocol handshake
+        // MCP protocol handshake — return full capability declaration
         return okResp(allocator, id,
-            \\{"protocolVersion":"2024-11-05","serverInfo":{"name":"unthinkmail","version":"1.0.0"},"capabilities":{}}
+            \\{"protocolVersion":"2024-11-05","serverInfo":{"name":"unthinkmail","version":"1.0.0"},"capabilities":{"tools":{"listChanged":false}}}
         );
+    } else if (mem.eql(u8, method, "ping")) {
+        return okResp(allocator, id, "{}");
     } else if (mem.eql(u8, method, "tools/list")) {
         return toolsList(allocator, id);
     } else if (mem.eql(u8, method, "tools/call")) {
@@ -233,28 +269,42 @@ fn errResp(allocator: mem.Allocator, id: ?json.Value, code: i32, msg: []const u8
     );
 }
 
-fn resultResp(allocator: mem.Allocator, id: ?json.Value, result: json.Value) ![]u8 {
-    const id_s = try idStr(allocator, id);
-    defer allocator.free(id_s);
-    const result_s = try json.Stringify.valueAlloc(allocator, result, .{});
-    defer allocator.free(result_s);
-    return std.fmt.allocPrint(allocator,
-        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}",
-        .{ id_s, result_s },
-    );
-}
-
 // --- Tool definitions ---
 
 fn toolsList(allocator: mem.Allocator, id: ?json.Value) ![]u8 {
     return okResp(allocator, id,
         \\{"tools":[
-        \\{"name":"listfolders","description":"List all IMAP folders","inputSchema":{"type":"object","properties":{}}},
-        \\{"name":"searchmessages","description":"Search messages in a folder","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"folder":{"type":"string"}}}},
-        \\{"name":"getmessage","description":"Fetch message by UID","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"}}}},
-        \\{"name":"deletemessage","description":"Delete message by UID","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"}}}},
-        \\{"name":"movemessage","description":"Move message to another folder","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"},"destination":{"type":"string"}}}}
+        \\{"name":"listfolders","description":"List all IMAP mail folders / mailboxes","inputSchema":{"type":"object","properties":{},"required":[]}},
+        \\{"name":"searchmessages","description":"Search messages in a mail folder using IMAP search criteria (e.g. ALL, UNSEEN, FROM \"user@example.com\", SUBJECT \"hello\", SINCE 1-Jan-2024)","inputSchema":{"type":"object","properties":{"folder":{"type":"string","description":"Folder to search, e.g. INBOX"},"query":{"type":"string","description":"IMAP search criteria"}},"required":["folder"]}},
+        \\{"name":"getmessage","description":"Fetch the full content of a message by its UID","inputSchema":{"type":"object","properties":{"folder":{"type":"string","description":"Folder containing the message"},"uid":{"type":"string","description":"Message UID from searchmessages"}},"required":["folder","uid"]}},
+        \\{"name":"deletemessage","description":"Permanently delete a message by UID","inputSchema":{"type":"object","properties":{"folder":{"type":"string","description":"Folder containing the message"},"uid":{"type":"string","description":"Message UID"}},"required":["folder","uid"]}},
+        \\{"name":"movemessage","description":"Move a message to another folder","inputSchema":{"type":"object","properties":{"folder":{"type":"string","description":"Source folder"},"uid":{"type":"string","description":"Message UID"},"destination":{"type":"string","description":"Destination folder name"}},"required":["folder","uid","destination"]}}
         \\]}
+    );
+}
+
+// MCP tools/call response: wrap JSON value in content envelope
+fn toolResult(allocator: mem.Allocator, id: ?json.Value, value: json.Value) ![]u8 {
+    const text = try json.Stringify.valueAlloc(allocator, value, .{});
+    defer allocator.free(text);
+    const id_s = try idStr(allocator, id);
+    defer allocator.free(id_s);
+    const text_s = try json.Stringify.valueAlloc(allocator, json.Value{ .string = text }, .{});
+    defer allocator.free(text_s);
+    return std.fmt.allocPrint(allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":{s}}}],\"isError\":false}}}}",
+        .{ id_s, text_s },
+    );
+}
+
+fn toolError(allocator: mem.Allocator, id: ?json.Value, msg: []const u8) ![]u8 {
+    const id_s = try idStr(allocator, id);
+    defer allocator.free(id_s);
+    const msg_s = try json.Stringify.valueAlloc(allocator, json.Value{ .string = msg }, .{});
+    defer allocator.free(msg_s);
+    return std.fmt.allocPrint(allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":{s}}}],\"isError\":true}}}}",
+        .{ id_s, msg_s },
     );
 }
 
@@ -269,29 +319,33 @@ fn toolsCall(allocator: mem.Allocator, id: ?json.Value, imap: *ImapConn, config:
     const args = if (p.get("arguments")) |a| (if (a == .object) a.object else json.ObjectMap.init(allocator)) else json.ObjectMap.init(allocator);
 
     if (mem.eql(u8, name, "listfolders")) {
-        const result = imap.listFolders(allocator) catch |e| return errResp(allocator, id, -32000, @errorName(e));
-        return resultResp(allocator, id, result);
+        const result = imap.listFolders(allocator) catch |e| return toolError(allocator, id, @errorName(e));
+        return toolResult(allocator, id, result);
     } else if (mem.eql(u8, name, "searchmessages")) {
         const query = strField(args, "query") orelse "ALL";
         const folder = strField(args, "folder") orelse "INBOX";
-        const result = imap.searchMessages(allocator, folder, query) catch |e| return errResp(allocator, id, -32000, @errorName(e));
-        return resultResp(allocator, id, result);
+        const result = imap.searchMessages(allocator, folder, query) catch |e| return toolError(allocator, id, @errorName(e));
+        return toolResult(allocator, id, result);
     } else if (mem.eql(u8, name, "getmessage")) {
         const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
         const folder = strField(args, "folder") orelse "INBOX";
-        const result = imap.getMessage(allocator, folder, uid) catch |e| return errResp(allocator, id, -32000, @errorName(e));
-        return resultResp(allocator, id, result);
+        const result = imap.getMessage(allocator, folder, uid) catch |e| return toolError(allocator, id, @errorName(e));
+        return toolResult(allocator, id, result);
     } else if (mem.eql(u8, name, "deletemessage")) {
         const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
         const folder = strField(args, "folder") orelse "INBOX";
-        imap.deleteMessage(allocator, folder, uid) catch |e| return errResp(allocator, id, -32000, @errorName(e));
-        return okResp(allocator, id, "{\"deleted\":true}");
+        imap.deleteMessage(allocator, folder, uid) catch |e| return toolError(allocator, id, @errorName(e));
+        var res = json.ObjectMap.init(allocator);
+        try res.put("deleted", json.Value{ .bool = true });
+        return toolResult(allocator, id, json.Value{ .object = res });
     } else if (mem.eql(u8, name, "movemessage")) {
         const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
         const folder = strField(args, "folder") orelse "INBOX";
         const dest = strField(args, "destination") orelse return errResp(allocator, id, -32602, "Missing destination");
-        imap.moveMessage(allocator, folder, uid, dest) catch |e| return errResp(allocator, id, -32000, @errorName(e));
-        return okResp(allocator, id, "{\"moved\":true}");
+        imap.moveMessage(allocator, folder, uid, dest) catch |e| return toolError(allocator, id, @errorName(e));
+        var res = json.ObjectMap.init(allocator);
+        try res.put("moved", json.Value{ .bool = true });
+        return toolResult(allocator, id, json.Value{ .object = res });
     } else {
         return errResp(allocator, id, -32601, "Unknown tool");
     }
