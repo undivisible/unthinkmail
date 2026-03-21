@@ -25,7 +25,7 @@ const JsonRpcResponse = struct {
     jsonrpc: []const u8 = "2.0",
     id: ?json.Value = null,
     result: ?json.Value = null,
-    error: ?JsonRpcError = null,
+    @"error": ?JsonRpcError = null,
 };
 
 const JsonRpcError = struct {
@@ -53,16 +53,19 @@ pub fn main() !void {
     defer config_parsed.deinit();
     const config = config_parsed.value;
 
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
+    const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    var stdin_buf: [4096]u8 = undefined;
+    var stdout_buf: [4096]u8 = undefined;
+    var stdin_reader = stdin_file.reader(&stdin_buf);
+    var stdout_writer = stdout_file.writer(&stdout_buf);
 
     var imap_client = try ImapClient.init(allocator, config);
     defer imap_client.deinit();
 
-    var buf: [1024 * 64]u8 = undefined;
-    while (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        const parsed = json.parseFromSlice(JsonRpcRequest, allocator, line, .{}) catch |err| {
-            try sendError(stdout, null, -32700, "Parse error", null);
+    while (stdin_reader.interface.takeDelimiter('\n') catch null) |line| {
+        const parsed = json.parseFromSlice(JsonRpcRequest, allocator, line, .{}) catch {
+            try sendError(&stdout_writer.interface, null, -32700, "Parse error", null);
             continue;
         };
         defer parsed.deinit();
@@ -70,39 +73,41 @@ pub fn main() !void {
         const req = parsed.value;
 
         if (mem.eql(u8, req.method, "tools/list")) {
-            try listTools(allocator, stdout, req.id);
+            try listTools(allocator, &stdout_writer.interface, req.id);
         } else if (mem.eql(u8, req.method, "tools/call")) {
-            try callTool(allocator, stdout, req.id, &imap_client, config, req.params);
+            try callTool(allocator, &stdout_writer.interface, req.id, &imap_client, config, req.params);
         } else {
-            try sendError(stdout, req.id, -32601, "Method not found", null);
+            try sendError(&stdout_writer.interface, req.id, -32601, "Method not found", null);
         }
     }
 }
 
-fn sendResult(writer: anytype, id: ?json.Value, result: json.Value) !void {
+fn sendResult(writer: *std.Io.Writer, id: ?json.Value, result: json.Value) !void {
     const response = JsonRpcResponse{
         .id = id,
         .result = result,
     };
-    try json.stringify(response, .{}, writer);
+    try json.Stringify.value(response, .{}, writer);
     try writer.writeAll("\n");
+    try writer.flush();
 }
 
-fn sendError(writer: anytype, id: ?json.Value, code: i32, message: []const u8, data: ?json.Value) !void {
+fn sendError(writer: *std.Io.Writer, id: ?json.Value, code: i32, message: []const u8, data: ?json.Value) !void {
     const response = JsonRpcResponse{
         .id = id,
-        .error = .{
+        .@"error" = .{
             .code = code,
             .message = message,
             .data = data,
         },
     };
-    try json.stringify(response, .{}, writer);
+    try json.Stringify.value(response, .{}, writer);
     try writer.writeAll("\n");
+    try writer.flush();
 }
 
-fn listTools(allocator: mem.Allocator, writer: anytype, id: ?json.Value) !void {
-    const tools_json = 
+fn listTools(allocator: mem.Allocator, writer: *std.Io.Writer, id: ?json.Value) !void {
+    const tools_json =
         \\{
         \\  "tools": [
         \\    {"name": "listfolders", "description": "List all IMAP folders", "inputSchema": {"type": "object", "properties": {}}},
@@ -120,7 +125,8 @@ fn listTools(allocator: mem.Allocator, writer: anytype, id: ?json.Value) !void {
     try sendResult(writer, id, tools.value);
 }
 
-fn callTool(allocator: mem.Allocator, writer: anytype, id: ?json.Value, imap_client: *ImapClient, config: Config, params: ?json.Value) !void {
+fn callTool(allocator: mem.Allocator, writer: *std.Io.Writer, id: ?json.Value, imap_client: *ImapClient, config: Config, params: ?json.Value) !void {
+    _ = config;
     if (params == null or params.? != .object) {
         try sendError(writer, id, -32602, "Invalid params", null);
         return;
@@ -179,11 +185,11 @@ const ImapClient = struct {
 
         if (self.stream) |s| s.close();
         self.stream = try net.tcpConnectToHost(self.allocator, self.config.imap_host, self.config.imap_port);
-        
+
         // Purelymail usually uses 993 (IMAPS) or 143 (IMAP + STARTTLS)
         // For simplicity, let's assume we handle the connection.
         // Zig's std.crypto.tls needs a bundle.
-        
+
         // This part needs to be more robust for real IMAP
         // Read greeting
         var buf: [1024]u8 = undefined;
@@ -200,25 +206,29 @@ const ImapClient = struct {
         return try std.fmt.allocPrint(self.allocator, "A{d}", .{self.tag_counter});
     }
 
-    fn sendCommand(self: *ImapClient, tag: []const u8, cmd: []const u8, args: []const []const u8) !void {
-        try self.stream.?.writer().print("{s} {s}", .{ tag, cmd });
-        for (args) |arg| {
-            try self.stream.?.writer().print(" \"{s}\"", .{arg});
+    fn sendCommand(self: *ImapClient, tag: []const u8, cmd: []const u8, cmd_args: []const []const u8) !void {
+        var wr_buf: [4096]u8 = undefined;
+        var wr = self.stream.?.writer(&wr_buf);
+        try wr.interface.print("{s} {s}", .{ tag, cmd });
+        for (cmd_args) |arg| {
+            try wr.interface.print(" \"{s}\"", .{arg});
         }
-        try self.stream.?.writer().writeAll("\r\n");
+        try wr.interface.writeAll("\r\n");
+        wr.interface.flush() catch {};
     }
 
     fn readResponse(self: *ImapClient, tag: []const u8) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.allocator);
-        const reader = self.stream.?.reader();
+        var result_buf: std.ArrayList(u8) = .{};
+        var rd_buf: [4096]u8 = undefined;
+        var rd = self.stream.?.reader(&rd_buf);
+        const rdr = rd.interface();
         while (true) {
-            const line = try reader.readUntilDelimiterAlloc(self.allocator, '\n', 1024 * 1024);
-            defer self.allocator.free(line);
-            try buf.appendSlice(line);
-            try buf.append('\n');
+            const line = rdr.takeDelimiter('\n') catch break orelse break;
+            try result_buf.appendSlice(self.allocator, line);
+            try result_buf.append(self.allocator, '\n');
             if (mem.startsWith(u8, line, tag)) break;
         }
-        return buf.toOwnedSlice();
+        return result_buf.toOwnedSlice(self.allocator);
     }
 
     pub fn listFolders(self: *ImapClient) !json.Value {
@@ -228,13 +238,13 @@ const ImapClient = struct {
         const resp = try self.readResponse(tag);
         defer self.allocator.free(resp);
 
-        var list = std.ArrayList(json.Value).init(self.allocator);
-        var lines = mem.split(u8, resp, "\n");
+        var list = json.Array.init(self.allocator);
+        var lines = mem.splitScalar(u8, resp, '\n');
         while (lines.next()) |line| {
             if (mem.startsWith(u8, line, "* LIST")) {
                 // Parse folder name
-                const last_quote = mem.lastIndexOf(u8, line, "\"") orelse continue;
-                const prev_quote = mem.lastIndexOf(u8, line[0..last_quote], "\"") orelse continue;
+                const last_quote = mem.lastIndexOfScalar(u8, line, '"') orelse continue;
+                const prev_quote = mem.lastIndexOfScalar(u8, line[0..last_quote], '"') orelse continue;
                 const folder_name = line[prev_quote + 1 .. last_quote];
                 try list.append(json.Value{ .string = try self.allocator.dupe(u8, folder_name) });
             }
@@ -257,11 +267,11 @@ const ImapClient = struct {
         const resp = try self.readResponse(stag);
         defer self.allocator.free(resp);
 
-        var list = std.ArrayList(json.Value).init(self.allocator);
-        var lines = mem.split(u8, resp, "\n");
+        var list = json.Array.init(self.allocator);
+        var lines = mem.splitScalar(u8, resp, '\n');
         while (lines.next()) |line| {
             if (mem.startsWith(u8, line, "* SEARCH")) {
-                var parts = mem.split(u8, line[9..], " ");
+                var parts = mem.splitScalar(u8, line[9..], ' ');
                 while (parts.next()) |part| {
                     if (part.len > 0) try list.append(json.Value{ .string = try self.allocator.dupe(u8, part) });
                 }
