@@ -497,10 +497,10 @@ const ImapConn = struct {
         std.log.info("IMAP: connecting to {s}:{d}", .{ self.config.imap_host, self.config.imap_port });
 
         // TCP connect with 10-second timeout (non-blocking socket + poll)
-        self.stream = try connectWithTimeout(allocator, self.config.imap_host, self.config.imap_port, 10_000);
-
-        // Set 15-second read/write timeouts for TLS handshake and IMAP operations
-        setSocketTimeouts(self.stream.?.handle, 15);
+        self.stream = connectWithTimeout(allocator, self.config.imap_host, self.config.imap_port, 10_000) catch |e| {
+            std.log.err("IMAP: TCP connect failed: {}", .{e});
+            return error.ImapConnectFailed;
+        };
 
         // Allocate reader and writer on heap (stable addresses for TLS to reference)
         const rdr = try allocator.create(net.Stream.Reader);
@@ -511,29 +511,39 @@ const ImapConn = struct {
         wtr.* = self.stream.?.writer(&self.raw_wr_buf);
         self.raw_writer = wtr;
 
-        std.log.info("IMAP: TCP ok, TLS handshake", .{});
+        std.log.info("IMAP: TCP ok, scanning CA bundle", .{});
 
         // TLS handshake
         var bundle = std.crypto.Certificate.Bundle{};
-        try bundle.rescan(allocator);
+        bundle.rescan(allocator) catch |e| {
+            std.log.err("IMAP: CA bundle rescan failed: {}", .{e});
+            return error.ImapCaBundleFailed;
+        };
         defer bundle.deinit(allocator);
+        std.log.info("IMAP: CA bundle ok ({d} certs), TLS handshake", .{bundle.map.count()});
 
         const tls = try allocator.create(std.crypto.tls.Client);
-        tls.* = try std.crypto.tls.Client.init(rdr.interface(), &wtr.interface, .{
+        tls.* = std.crypto.tls.Client.init(rdr.interface(), &wtr.interface, .{
             .host = .{ .explicit = self.config.imap_host },
             .ca = .{ .bundle = bundle },
             .read_buffer = &self.tls_rd_buf,
             .write_buffer = &self.tls_wr_buf,
-        });
+        }) catch |e| {
+            allocator.destroy(tls);
+            std.log.err("IMAP: TLS handshake failed: {}", .{e});
+            return error.ImapTlsFailed;
+        };
         self.tls_client = tls;
 
         std.log.info("IMAP: TLS ok, reading greeting", .{});
 
         // Read IMAP greeting
         var greet_buf: [1024]u8 = undefined;
-        _ = try tls.reader.readSliceShort(&greet_buf);
-
-        std.log.info("IMAP: greeting received, logging in", .{});
+        const greet_n = tls.reader.readSliceShort(&greet_buf) catch |e| {
+            std.log.err("IMAP: greeting read failed: {}", .{e});
+            return error.ImapGreetingFailed;
+        };
+        std.log.info("IMAP: greeting ({d} bytes): {s}", .{ greet_n, greet_buf[0..@min(greet_n, 80)] });
 
         // LOGIN
         const tag = try self.nextTag(allocator);
@@ -545,13 +555,19 @@ const ImapConn = struct {
         try tls.writer.writeAll(cmd);
         try tls.writer.flush();
 
-        const resp = try self.readResp(allocator, tag);
+        const resp = self.readResp(allocator, tag) catch |e| {
+            std.log.err("IMAP: login response read failed: {}", .{e});
+            return error.ImapLoginReadFailed;
+        };
         defer allocator.free(resp);
 
-        if (!mem.startsWith(u8, lastTaggedLine(resp, tag), "OK")) {
+        const tagged = lastTaggedLine(resp, tag);
+        std.log.info("IMAP: login response: {s}", .{tagged[0..@min(tagged.len, 60)]});
+        if (!mem.startsWith(u8, tagged, "OK")) {
             return error.ImapAuthFailed;
         }
         self.authenticated = true;
+        std.log.info("IMAP: authenticated ok", .{});
     }
 
     fn sendCmd(self: *ImapConn, allocator: mem.Allocator, cmd: []const u8) ![]u8 {
