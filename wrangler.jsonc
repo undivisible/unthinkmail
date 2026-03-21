@@ -26,4 +26,11 @@
       "new_sqlite_classes": ["McpContainer"]
     }
   ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true
+    }
+  }
 }
