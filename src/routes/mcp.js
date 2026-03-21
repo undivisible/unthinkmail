@@ -32,11 +32,21 @@ export async function handleMcp(request, env) {
 
   const enrichedBody = { ...body, _credentials: credentials };
 
-  const containerResponse = await stub.fetch(new Request(request.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(enrichedBody),
-  }));
+  console.log('[mcp] method=%s calling container hash=%s', body.method, hash.slice(0, 8));
+
+  let containerResponse;
+  try {
+    containerResponse = await stub.fetch(new Request(request.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(enrichedBody),
+    }));
+  } catch (e) {
+    console.error('[mcp] container fetch error:', e?.message ?? e);
+    return jsonError('Container error: ' + (e?.message ?? 'unknown'), 502);
+  }
+
+  console.log('[mcp] container responded status=%d', containerResponse.status);
 
   const responseBody = await containerResponse.text();
   return new Response(responseBody, {
