@@ -39,20 +39,6 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    if (args.len < 2) {
-        std.debug.print("Usage: {s} <config-path>\n", .{args[0]});
-        std.process.exit(1);
-    }
-
-    const config_data = try fs.cwd().readFileAlloc(allocator, args[1], 1024 * 1024);
-    defer allocator.free(config_data);
-    const config_parsed = try json.parseFromSlice(Config, allocator, config_data, .{});
-    defer config_parsed.deinit();
-    const config = config_parsed.value;
-
     const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
     const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
     var stdin_buf: [4096]u8 = undefined;
@@ -60,8 +46,12 @@ pub fn main() !void {
     var stdin_reader = stdin_file.reader(&stdin_buf);
     var stdout_writer = stdout_file.writer(&stdout_buf);
 
-    var imap_client = try ImapClient.init(allocator, config);
-    defer imap_client.deinit();
+    // Start with no IMAP client; initialized via the "initialize" JSON-RPC method
+    var imap_client: ?ImapClient = null;
+    defer if (imap_client) |*c| c.deinit();
+
+    // Stored config, populated by the "initialize" method
+    var stored_config: ?Config = null;
 
     while (stdin_reader.interface.takeDelimiter('\n') catch null) |line| {
         const parsed = json.parseFromSlice(JsonRpcRequest, allocator, line, .{}) catch {
@@ -72,10 +62,60 @@ pub fn main() !void {
 
         const req = parsed.value;
 
-        if (mem.eql(u8, req.method, "tools/list")) {
+        if (mem.eql(u8, req.method, "initialize")) {
+            // Accept credentials and create the ImapClient
+            if (req.params == null or req.params.? != .object) {
+                try sendError(&stdout_writer.interface, req.id, -32602, "Invalid params: expected object with credentials", null);
+                continue;
+            }
+            const p = req.params.?.object;
+
+            const imap_host = if (p.get("imap_host")) |v| (if (v == .string) v.string else null) else null;
+            const imap_user = if (p.get("imap_user")) |v| (if (v == .string) v.string else null) else null;
+            const imap_pass = if (p.get("imap_pass")) |v| (if (v == .string) v.string else null) else null;
+            const smtp_host = if (p.get("smtp_host")) |v| (if (v == .string) v.string else null) else null;
+
+            if (imap_host == null or imap_user == null or imap_pass == null or smtp_host == null) {
+                try sendError(&stdout_writer.interface, req.id, -32602, "Missing required credential fields", null);
+                continue;
+            }
+
+            const imap_port: u16 = if (p.get("imap_port")) |v| switch (v) {
+                .integer => @intCast(v.integer),
+                else => 993,
+            } else 993;
+
+            const smtp_port: u16 = if (p.get("smtp_port")) |v| switch (v) {
+                .integer => @intCast(v.integer),
+                else => 465,
+            } else 465;
+
+            // Clean up previous client if re-initializing
+            if (imap_client) |*c| c.deinit();
+
+            stored_config = Config{
+                .imap_host = imap_host.?,
+                .imap_port = imap_port,
+                .imap_user = imap_user.?,
+                .imap_pass = imap_pass.?,
+                .smtp_host = smtp_host.?,
+                .smtp_port = smtp_port,
+            };
+
+            imap_client = try ImapClient.init(allocator, stored_config.?);
+
+            var result = json.ObjectMap.init(allocator);
+            try result.put("status", json.Value{ .string = "ok" });
+            try sendResult(&stdout_writer.interface, req.id, json.Value{ .object = result });
+        } else if (mem.eql(u8, req.method, "tools/list")) {
+            // tools/list works without initialization (no credentials needed)
             try listTools(allocator, &stdout_writer.interface, req.id);
         } else if (mem.eql(u8, req.method, "tools/call")) {
-            try callTool(allocator, &stdout_writer.interface, req.id, &imap_client, config, req.params);
+            if (imap_client == null or stored_config == null) {
+                try sendError(&stdout_writer.interface, req.id, -32002, "Not initialized: send 'initialize' with credentials first", null);
+                continue;
+            }
+            try callTool(allocator, &stdout_writer.interface, req.id, &imap_client.?, stored_config.?, req.params);
         } else {
             try sendError(&stdout_writer.interface, req.id, -32601, "Method not found", null);
         }
