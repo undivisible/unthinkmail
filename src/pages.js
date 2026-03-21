@@ -35,50 +35,13 @@ const HEAD = (title) => `
 </style>`;
 
 const FOOTER_LINKS = `
-  <div class="mt-16 text-xs text-dim space-x-3 text-center">
+  <div class="mt-12 text-xs text-dim space-x-3 text-center">
     <a href="https://undivisible.dev" class="hover:text-sub transition-colors">undivisible.dev</a>
     <span class="text-border">·</span>
     <a href="https://buymeacoffee.com/undivisible" class="hover:text-sub transition-colors">donate</a>
     <span class="text-border">·</span>
     <a href="https://github.com/undivisible/unthinkmail" class="hover:text-sub transition-colors">source</a>
   </div>`;
-
-export const LANDING = `<!DOCTYPE html>
-<html lang="en" class="dark bg-black">
-<head>${HEAD('unthinkmail')}</head>
-<body class="bg-black text-body min-h-screen flex items-center justify-center">
-<div class="max-w-lg w-full mx-auto px-6 py-16 text-center">
-  <h1 class="text-4xl font-thin tracking-tight text-white mb-1">unthinkmail</h1>
-  <p class="text-sub text-sm mb-3">give your ai access to your email inbox</p>
-  <p class="text-dim text-xs mb-8 max-w-sm mx-auto leading-relaxed">unthinkmail connects to your existing email account over imap and exposes it as an mcp server — so any ai client can read, search, and manage your mail as a native tool.</p>
-
-  <div class="grid grid-cols-2 gap-3 mb-8 text-left">
-    <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">your inbox, as tools</p>
-      <p class="text-sub text-xs">your ai can search mail, read threads, move messages, and delete — without you copy-pasting anything.</p>
-    </div>
-    <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">any imap provider</p>
-      <p class="text-sub text-xs">gmail, outlook, fastmail, purelymail — if it speaks imap, it works. no special setup required.</p>
-    </div>
-    <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">no accounts</p>
-      <p class="text-sub text-xs">enter your imap credentials once, get an encrypted key. nothing is stored. same credentials → same key, always.</p>
-    </div>
-    <div class="bg-surface border border-border rounded-lg p-4">
-      <p class="text-xs uppercase tracking-widest text-dim mb-2">open source</p>
-      <p class="text-sub text-xs">workers + zig. self-hostable, no seat limits, no vendor lock-in. inspect the code yourself.</p>
-    </div>
-  </div>
-
-  <a href="/hub" class="inline-block px-6 py-2 border border-dim rounded-md text-sub text-xs tracking-wider hover:text-white hover:border-sub transition-colors">
-    get your key
-  </a>
-
-  ${FOOTER_LINKS}
-</div>
-</body>
-</html>`;
 
 const HUB_SCRIPT = `
 function hub() {
@@ -210,8 +173,9 @@ export const HUB = `<!DOCTYPE html>
 <div class="max-w-lg mx-auto px-6 py-12">
 
   <div class="mb-8">
-    <a href="/" class="text-white font-light text-lg hover:text-sub transition-colors">unthinkmail</a>
-    <p class="text-sub text-xs mt-1">enter your email credentials to get an encrypted api key. nothing is stored.</p>
+    <h1 class="text-white font-light text-2xl mb-1">unthinkmail</h1>
+    <p class="text-sub text-xs">give your ai access to your email inbox via mcp</p>
+    <p class="text-dim text-xs mt-2 leading-relaxed max-w-sm">enter your imap credentials to get an encrypted api key. same credentials always produce the same key. nothing is stored.</p>
   </div>
 
   <!-- Provider presets -->

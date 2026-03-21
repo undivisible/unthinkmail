@@ -1,7 +1,7 @@
 import { McpContainer } from './container.js';
 import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
-import { LANDING, HUB } from './pages.js';
+import { HUB } from './pages.js';
 
 export { McpContainer };
 
@@ -34,10 +34,7 @@ export default {
     }
 
     try {
-      if (url.pathname === '/' && request.method === 'GET') {
-        return new Response(LANDING, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
-      }
-      if (url.pathname === '/hub' && request.method === 'GET') {
+      if ((url.pathname === '/' || url.pathname === '/hub') && request.method === 'GET') {
         return new Response(HUB, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
       }
       if (url.pathname === '/health') return json({ status: 'ok' });
