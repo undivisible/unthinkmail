@@ -1,9 +1,10 @@
+// HTTP JSON-RPC server for unthinkmail MCP
+// Listens on :8080, accepts POST / with JSON-RPC body
+// Worker injects "_credentials" field into every JSON-RPC request
 const std = @import("std");
 const json = std.json;
 const net = std.net;
 const mem = std.mem;
-const fs = std.fs;
-const crypto = std.crypto;
 
 const Config = struct {
     imap_host: []const u8,
@@ -14,24 +15,19 @@ const Config = struct {
     smtp_port: u16,
 };
 
-const JsonRpcRequest = struct {
-    jsonrpc: []const u8,
-    method: []const u8,
-    params: ?json.Value = null,
-    id: ?json.Value = null,
-};
+// Per-instance server state (one container = one user)
+const ServerState = struct {
+    allocator: mem.Allocator,
+    imap: ?*ImapConn = null,
+    config: ?Config = null,
 
-const JsonRpcResponse = struct {
-    jsonrpc: []const u8 = "2.0",
-    id: ?json.Value = null,
-    result: ?json.Value = null,
-    @"error": ?JsonRpcError = null,
-};
-
-const JsonRpcError = struct {
-    code: i32,
-    message: []const u8,
-    data: ?json.Value = null,
+    fn deinit(self: *ServerState) void {
+        if (self.imap) |c| {
+            c.deinit(self.allocator);
+            self.allocator.destroy(c);
+            self.imap = null;
+        }
+    }
 };
 
 pub fn main() !void {
@@ -39,303 +35,551 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
-    const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    var stdin_buf: [4096]u8 = undefined;
-    var stdout_buf: [4096]u8 = undefined;
-    var stdin_reader = stdin_file.reader(&stdin_buf);
-    var stdout_writer = stdout_file.writer(&stdout_buf);
+    var state = ServerState{ .allocator = allocator };
+    defer state.deinit();
 
-    // Start with no IMAP client; initialized via the "initialize" JSON-RPC method
-    var imap_client: ?ImapClient = null;
-    defer if (imap_client) |*c| c.deinit();
+    const address = try net.Address.parseIp("0.0.0.0", 8080);
+    var tcp_server = try address.listen(.{ .reuse_address = true });
+    defer tcp_server.deinit();
 
-    // Stored config, populated by the "initialize" method
-    var stored_config: ?Config = null;
+    std.log.info("unthinkmail MCP server listening on :8080", .{});
 
-    while (stdin_reader.interface.takeDelimiter('\n') catch null) |line| {
-        const parsed = json.parseFromSlice(JsonRpcRequest, allocator, line, .{}) catch {
-            try sendError(&stdout_writer.interface, null, -32700, "Parse error", null);
+    while (true) {
+        const conn = try tcp_server.accept();
+        handleConn(allocator, conn, &state) catch |err| {
+            std.log.err("connection error: {}", .{err});
+        };
+    }
+}
+
+// Read/write buffer sizes for HTTP layer
+const HTTP_BUF = 65536;
+
+fn handleConn(allocator: mem.Allocator, conn: net.Server.Connection, state: *ServerState) !void {
+    defer conn.stream.close();
+
+    var rd_buf: [HTTP_BUF]u8 = undefined;
+    var wr_buf: [HTTP_BUF]u8 = undefined;
+    var rd = conn.stream.reader(&rd_buf);
+    var wr = conn.stream.writer(&wr_buf);
+    var srv = std.http.Server.init(rd.interface(), &wr.interface);
+
+    // Handle keep-alive requests on the same connection
+    while (true) {
+        var request = srv.receiveHead() catch |err| switch (err) {
+            error.HttpConnectionClosing => return,
+            else => return err,
+        };
+
+        if (request.head.method != .POST) {
+            try request.respond("Method Not Allowed", .{ .status = .method_not_allowed });
+            continue;
+        }
+
+        // Read request body
+        const content_len = request.head.content_length orelse 0;
+        if (content_len > 4 * 1024 * 1024) {
+            try request.respond("Request Too Large", .{ .status = .payload_too_large });
+            continue;
+        }
+
+        var body_rd_buf: [4096]u8 = undefined;
+        const body_io = request.readerExpectNone(&body_rd_buf);
+        const body = body_io.readAlloc(allocator, content_len) catch {
+            try request.respond("Bad Request", .{ .status = .bad_request });
             continue;
         };
-        defer parsed.deinit();
+        defer allocator.free(body);
 
-        const req = parsed.value;
+        const response = handleRpc(allocator, body, state) catch |err| blk: {
+            std.log.err("RPC error: {}", .{err});
+            break :blk try allocPrint(allocator,
+                \\{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Internal error"}}}}
+            );
+        };
+        defer allocator.free(response);
 
-        if (mem.eql(u8, req.method, "initialize")) {
-            // Accept credentials and create the ImapClient
-            if (req.params == null or req.params.? != .object) {
-                try sendError(&stdout_writer.interface, req.id, -32602, "Invalid params: expected object with credentials", null);
-                continue;
-            }
-            const p = req.params.?.object;
+        try request.respond(response, .{
+            .status = .ok,
+            .extra_headers = &.{
+                .{ .name = "content-type", .value = "application/json" },
+                .{ .name = "access-control-allow-origin", .value = "*" },
+            },
+        });
 
-            const imap_host = if (p.get("imap_host")) |v| (if (v == .string) v.string else null) else null;
-            const imap_user = if (p.get("imap_user")) |v| (if (v == .string) v.string else null) else null;
-            const imap_pass = if (p.get("imap_pass")) |v| (if (v == .string) v.string else null) else null;
-            const smtp_host = if (p.get("smtp_host")) |v| (if (v == .string) v.string else null) else null;
+        if (!request.head.keep_alive) break;
+    }
+}
 
-            if (imap_host == null or imap_user == null or imap_pass == null or smtp_host == null) {
-                try sendError(&stdout_writer.interface, req.id, -32602, "Missing required credential fields", null);
-                continue;
-            }
+fn allocPrint(allocator: mem.Allocator, comptime fmt: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, fmt, .{});
+}
 
-            const imap_port: u16 = if (p.get("imap_port")) |v| switch (v) {
-                .integer => @intCast(v.integer),
-                else => 993,
-            } else 993;
+fn handleRpc(allocator: mem.Allocator, body: []const u8, state: *ServerState) ![]u8 {
+    const parsed = json.parseFromSlice(json.Value, allocator, body, .{}) catch {
+        return errResp(allocator, null, -32700, "Parse error");
+    };
+    defer parsed.deinit();
 
-            const smtp_port: u16 = if (p.get("smtp_port")) |v| switch (v) {
-                .integer => @intCast(v.integer),
-                else => 465,
-            } else 465;
+    if (parsed.value != .object) return errResp(allocator, null, -32700, "Expected object");
+    const obj = parsed.value.object;
 
-            // Clean up previous client if re-initializing
-            if (imap_client) |*c| c.deinit();
+    const id = obj.get("id");
+    const method_v = obj.get("method") orelse return errResp(allocator, id, -32600, "Missing method");
+    if (method_v != .string) return errResp(allocator, id, -32600, "Method must be string");
+    const method = method_v.string;
+    const params = obj.get("params");
 
-            stored_config = Config{
-                .imap_host = imap_host.?,
-                .imap_port = imap_port,
-                .imap_user = imap_user.?,
-                .imap_pass = imap_pass.?,
-                .smtp_host = smtp_host.?,
-                .smtp_port = smtp_port,
-            };
+    // Apply credentials if present (injected by Worker on every request)
+    if (obj.get("_credentials")) |creds| {
+        if (creds == .object) applyCredentials(allocator, state, creds.object) catch |err| {
+            std.log.err("credentials error: {}", .{err});
+        };
+    }
 
-            imap_client = try ImapClient.init(allocator, stored_config.?);
+    if (mem.eql(u8, method, "initialize")) {
+        // MCP protocol handshake
+        return okResp(allocator, id,
+            \\{"protocolVersion":"2024-11-05","serverInfo":{"name":"unthinkmail","version":"1.0.0"},"capabilities":{}}
+        );
+    } else if (mem.eql(u8, method, "tools/list")) {
+        return toolsList(allocator, id);
+    } else if (mem.eql(u8, method, "tools/call")) {
+        if (state.imap == null) {
+            return errResp(allocator, id, -32002, "No credentials. Configure IMAP via the hub first.");
+        }
+        return toolsCall(allocator, id, state.imap.?, state.config.?, params);
+    } else {
+        return errResp(allocator, id, -32601, "Method not found");
+    }
+}
 
-            var result = json.ObjectMap.init(allocator);
-            try result.put("status", json.Value{ .string = "ok" });
-            try sendResult(&stdout_writer.interface, req.id, json.Value{ .object = result });
-        } else if (mem.eql(u8, req.method, "tools/list")) {
-            // tools/list works without initialization (no credentials needed)
-            try listTools(allocator, &stdout_writer.interface, req.id);
-        } else if (mem.eql(u8, req.method, "tools/call")) {
-            if (imap_client == null or stored_config == null) {
-                try sendError(&stdout_writer.interface, req.id, -32002, "Not initialized: send 'initialize' with credentials first", null);
-                continue;
-            }
-            try callTool(allocator, &stdout_writer.interface, req.id, &imap_client.?, stored_config.?, req.params);
-        } else {
-            try sendError(&stdout_writer.interface, req.id, -32601, "Method not found", null);
+fn applyCredentials(allocator: mem.Allocator, state: *ServerState, creds: json.ObjectMap) !void {
+    const imap_host = strField(creds, "imap_host") orelse return;
+    const imap_user = strField(creds, "imap_user") orelse return;
+    const imap_pass = strField(creds, "imap_pass") orelse return;
+    const smtp_host = strField(creds, "smtp_host") orelse "";
+    const imap_port = portField(creds, "imap_port", 993);
+    const smtp_port = portField(creds, "smtp_port", 465);
+
+    // Same creds → reuse connection
+    if (state.config) |cfg| {
+        if (mem.eql(u8, cfg.imap_host, imap_host) and
+            mem.eql(u8, cfg.imap_user, imap_user) and
+            cfg.imap_port == imap_port)
+        {
+            return;
         }
     }
-}
 
-fn sendResult(writer: *std.Io.Writer, id: ?json.Value, result: json.Value) !void {
-    const response = JsonRpcResponse{
-        .id = id,
-        .result = result,
-    };
-    try json.Stringify.value(response, .{}, writer);
-    try writer.writeAll("\n");
-    try writer.flush();
-}
-
-fn sendError(writer: *std.Io.Writer, id: ?json.Value, code: i32, message: []const u8, data: ?json.Value) !void {
-    const response = JsonRpcResponse{
-        .id = id,
-        .@"error" = .{
-            .code = code,
-            .message = message,
-            .data = data,
-        },
-    };
-    try json.Stringify.value(response, .{}, writer);
-    try writer.writeAll("\n");
-    try writer.flush();
-}
-
-fn listTools(allocator: mem.Allocator, writer: *std.Io.Writer, id: ?json.Value) !void {
-    const tools_json =
-        \\{
-        \\  "tools": [
-        \\    {"name": "listfolders", "description": "List all IMAP folders", "inputSchema": {"type": "object", "properties": {}}},
-        \\    {"name": "searchmessages", "description": "Search messages", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
-        \\    {"name": "getmessage", "description": "Get message content", "inputSchema": {"type": "object", "properties": {"uid": {"type": "string"}}}},
-        \\    {"name": "composedraft", "description": "Compose a draft", "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}}},
-        \\    {"name": "senddraft", "description": "Send a draft", "inputSchema": {"type": "object", "properties": {"draftid": {"type": "string"}}}},
-        \\    {"name": "deletemessage", "description": "Delete a message", "inputSchema": {"type": "object", "properties": {"uid": {"type": "string"}}}},
-        \\    {"name": "movemessage", "description": "Move a message", "inputSchema": {"type": "object", "properties": {"uid": {"type": "string"}, "destination": {"type": "string"}}}}
-        \\  ]
-        \\}
-    ;
-    const tools = try json.parseFromSlice(json.Value, allocator, tools_json, .{});
-    defer tools.deinit();
-    try sendResult(writer, id, tools.value);
-}
-
-fn callTool(allocator: mem.Allocator, writer: *std.Io.Writer, id: ?json.Value, imap_client: *ImapClient, config: Config, params: ?json.Value) !void {
-    _ = config;
-    if (params == null or params.? != .object) {
-        try sendError(writer, id, -32602, "Invalid params", null);
-        return;
+    // Reset connection
+    if (state.imap) |c| {
+        c.deinit(allocator);
+        allocator.destroy(c);
+        state.imap = null;
     }
 
-    const name_val = params.?.object.get("name") orelse return try sendError(writer, id, -32602, "Missing name", null);
-    if (name_val != .string) return try sendError(writer, id, -32602, "Name must be string", null);
-    const name = name_val.string;
+    state.config = Config{
+        .imap_host = try allocator.dupe(u8, imap_host),
+        .imap_port = imap_port,
+        .imap_user = try allocator.dupe(u8, imap_user),
+        .imap_pass = try allocator.dupe(u8, imap_pass),
+        .smtp_host = try allocator.dupe(u8, smtp_host),
+        .smtp_port = smtp_port,
+    };
 
-    const args = params.?.object.get("arguments") orelse json.Value{ .object = json.ObjectMap.init(allocator) };
+    const conn = try allocator.create(ImapConn);
+    conn.* = ImapConn.init(state.config.?);
+    state.imap = conn;
+}
+
+fn strField(obj: json.ObjectMap, key: []const u8) ?[]const u8 {
+    const v = obj.get(key) orelse return null;
+    return if (v == .string) v.string else null;
+}
+
+fn portField(obj: json.ObjectMap, key: []const u8, default: u16) u16 {
+    const v = obj.get(key) orelse return default;
+    return switch (v) {
+        .integer => @intCast(v.integer),
+        .string => std.fmt.parseInt(u16, v.string, 10) catch default,
+        else => default,
+    };
+}
+
+// --- JSON-RPC response helpers ---
+
+fn idStr(allocator: mem.Allocator, id: ?json.Value) ![]u8 {
+    return if (id) |v| json.Stringify.valueAlloc(allocator, v, .{}) else allocator.dupe(u8, "null");
+}
+
+fn okResp(allocator: mem.Allocator, id: ?json.Value, result_json: []const u8) ![]u8 {
+    const id_s = try idStr(allocator, id);
+    defer allocator.free(id_s);
+    return std.fmt.allocPrint(allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}",
+        .{ id_s, result_json },
+    );
+}
+
+fn errResp(allocator: mem.Allocator, id: ?json.Value, code: i32, msg: []const u8) ![]u8 {
+    const id_s = try idStr(allocator, id);
+    defer allocator.free(id_s);
+    const msg_s = try json.Stringify.valueAlloc(allocator, json.Value{ .string = msg }, .{});
+    defer allocator.free(msg_s);
+    return std.fmt.allocPrint(allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":{d},\"message\":{s}}}}}",
+        .{ id_s, code, msg_s },
+    );
+}
+
+fn resultResp(allocator: mem.Allocator, id: ?json.Value, result: json.Value) ![]u8 {
+    const id_s = try idStr(allocator, id);
+    defer allocator.free(id_s);
+    const result_s = try json.Stringify.valueAlloc(allocator, result, .{});
+    defer allocator.free(result_s);
+    return std.fmt.allocPrint(allocator,
+        "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}",
+        .{ id_s, result_s },
+    );
+}
+
+// --- Tool definitions ---
+
+fn toolsList(allocator: mem.Allocator, id: ?json.Value) ![]u8 {
+    return okResp(allocator, id,
+        \\{"tools":[
+        \\{"name":"listfolders","description":"List all IMAP folders","inputSchema":{"type":"object","properties":{}}},
+        \\{"name":"searchmessages","description":"Search messages in a folder","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"folder":{"type":"string"}}}},
+        \\{"name":"getmessage","description":"Fetch message by UID","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"}}}},
+        \\{"name":"deletemessage","description":"Delete message by UID","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"}}}},
+        \\{"name":"movemessage","description":"Move message to another folder","inputSchema":{"type":"object","properties":{"uid":{"type":"string"},"folder":{"type":"string"},"destination":{"type":"string"}}}}
+        \\]}
+    );
+}
+
+fn toolsCall(allocator: mem.Allocator, id: ?json.Value, imap: *ImapConn, config: Config, params: ?json.Value) ![]u8 {
+    _ = config;
+    if (params == null or params.? != .object) return errResp(allocator, id, -32602, "Invalid params");
+    const p = params.?.object;
+
+    const name_v = p.get("name") orelse return errResp(allocator, id, -32602, "Missing name");
+    if (name_v != .string) return errResp(allocator, id, -32602, "name must be string");
+    const name = name_v.string;
+    const args = if (p.get("arguments")) |a| (if (a == .object) a.object else json.ObjectMap.init(allocator)) else json.ObjectMap.init(allocator);
 
     if (mem.eql(u8, name, "listfolders")) {
-        const result = try imap_client.listFolders();
-        try sendResult(writer, id, result);
+        const result = imap.listFolders(allocator) catch |e| return errResp(allocator, id, -32000, @errorName(e));
+        return resultResp(allocator, id, result);
     } else if (mem.eql(u8, name, "searchmessages")) {
-        const query = args.object.get("query") orelse return try sendError(writer, id, -32602, "Missing query", null);
-        const result = try imap_client.searchMessages(query.string);
-        try sendResult(writer, id, result);
+        const query = strField(args, "query") orelse "ALL";
+        const folder = strField(args, "folder") orelse "INBOX";
+        const result = imap.searchMessages(allocator, folder, query) catch |e| return errResp(allocator, id, -32000, @errorName(e));
+        return resultResp(allocator, id, result);
     } else if (mem.eql(u8, name, "getmessage")) {
-        const uid = args.object.get("uid") orelse return try sendError(writer, id, -32602, "Missing uid", null);
-        const result = try imap_client.getMessage(uid.string);
-        try sendResult(writer, id, result);
-    } else if (mem.eql(u8, name, "composedraft")) {
-        // Implement draft creation (maybe just store in a Drafts folder)
-    } else if (mem.eql(u8, name, "senddraft")) {
-        // Implement SMTP send
+        const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
+        const folder = strField(args, "folder") orelse "INBOX";
+        const result = imap.getMessage(allocator, folder, uid) catch |e| return errResp(allocator, id, -32000, @errorName(e));
+        return resultResp(allocator, id, result);
     } else if (mem.eql(u8, name, "deletemessage")) {
-        // Implement STORE +FLAGS (\Deleted) + EXPUNGE
+        const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
+        const folder = strField(args, "folder") orelse "INBOX";
+        imap.deleteMessage(allocator, folder, uid) catch |e| return errResp(allocator, id, -32000, @errorName(e));
+        return okResp(allocator, id, "{\"deleted\":true}");
     } else if (mem.eql(u8, name, "movemessage")) {
-        // Implement COPY + STORE +FLAGS (\Deleted) + EXPUNGE
+        const uid = strField(args, "uid") orelse return errResp(allocator, id, -32602, "Missing uid");
+        const folder = strField(args, "folder") orelse "INBOX";
+        const dest = strField(args, "destination") orelse return errResp(allocator, id, -32602, "Missing destination");
+        imap.moveMessage(allocator, folder, uid, dest) catch |e| return errResp(allocator, id, -32000, @errorName(e));
+        return okResp(allocator, id, "{\"moved\":true}");
     } else {
-        try sendError(writer, id, -32601, "Method not found", null);
+        return errResp(allocator, id, -32601, "Unknown tool");
     }
 }
 
-const ImapClient = struct {
-    allocator: mem.Allocator,
+// --- IMAP connection ---
+// Stored on the heap so its address is stable (TLS client holds pointers into it)
+
+const TLS_MIN_BUF = std.crypto.tls.Client.min_buffer_len;
+
+const ImapConn = struct {
     config: Config,
     stream: ?net.Stream = null,
     authenticated: bool = false,
     tag_counter: usize = 0,
+    // Buffers must outlive the TLS client and stream reader/writer
+    raw_rd_buf: [TLS_MIN_BUF]u8 = undefined,
+    raw_wr_buf: [8192]u8 = undefined,
+    tls_rd_buf: [TLS_MIN_BUF]u8 = undefined,
+    tls_wr_buf: [8192]u8 = undefined,
+    // Allocated after connect (stored as pointer since Reader/Writer aren't moveable)
+    raw_reader: ?*net.Stream.Reader = null,
+    raw_writer: ?*net.Stream.Writer = null,
+    tls_client: ?*std.crypto.tls.Client = null,
 
-    pub fn init(allocator: mem.Allocator, config: Config) !ImapClient {
-        return ImapClient{
-            .allocator = allocator,
-            .config = config,
-        };
+    fn init(config: Config) ImapConn {
+        return .{ .config = config };
     }
 
-    pub fn deinit(self: *ImapClient) void {
+    fn deinit(self: *ImapConn, allocator: mem.Allocator) void {
+        if (self.tls_client) |c| allocator.destroy(c);
+        if (self.raw_writer) |w| allocator.destroy(w);
+        if (self.raw_reader) |r| allocator.destroy(r);
         if (self.stream) |s| s.close();
     }
 
-    fn ensureConnected(self: *ImapClient) !void {
-        if (self.authenticated and self.stream != null) return;
+    fn nextTag(self: *ImapConn, allocator: mem.Allocator) ![]u8 {
+        self.tag_counter += 1;
+        return std.fmt.allocPrint(allocator, "T{d}", .{self.tag_counter});
+    }
 
-        if (self.stream) |s| s.close();
-        self.stream = try net.tcpConnectToHost(self.allocator, self.config.imap_host, self.config.imap_port);
+    fn ensureConnected(self: *ImapConn, allocator: mem.Allocator) !void {
+        if (self.authenticated) return;
 
-        // Purelymail usually uses 993 (IMAPS) or 143 (IMAP + STARTTLS)
-        // For simplicity, let's assume we handle the connection.
-        // Zig's std.crypto.tls needs a bundle.
+        // Clean up previous attempt
+        if (self.tls_client) |c| { allocator.destroy(c); self.tls_client = null; }
+        if (self.raw_writer) |w| { allocator.destroy(w); self.raw_writer = null; }
+        if (self.raw_reader) |r| { allocator.destroy(r); self.raw_reader = null; }
+        if (self.stream) |s| { s.close(); self.stream = null; }
 
-        // This part needs to be more robust for real IMAP
-        // Read greeting
-        var buf: [1024]u8 = undefined;
-        _ = try self.stream.?.read(&buf);
+        // TCP connect
+        self.stream = try net.tcpConnectToHost(allocator, self.config.imap_host, self.config.imap_port);
 
-        const tag = try self.nextTag();
-        try self.sendCommand(tag, "LOGIN", &.{ self.config.imap_user, self.config.imap_pass });
-        _ = try self.readResponse(tag);
+        // Allocate reader and writer on heap (stable addresses for TLS to reference)
+        const rdr = try allocator.create(net.Stream.Reader);
+        rdr.* = self.stream.?.reader(&self.raw_rd_buf);
+        self.raw_reader = rdr;
+
+        const wtr = try allocator.create(net.Stream.Writer);
+        wtr.* = self.stream.?.writer(&self.raw_wr_buf);
+        self.raw_writer = wtr;
+
+        // TLS handshake
+        var bundle = std.crypto.Certificate.Bundle{};
+        try bundle.rescan(allocator);
+        defer bundle.deinit(allocator);
+
+        const tls = try allocator.create(std.crypto.tls.Client);
+        tls.* = try std.crypto.tls.Client.init(rdr.interface(), &wtr.interface, .{
+            .host = .{ .explicit = self.config.imap_host },
+            .ca = .{ .bundle = bundle },
+            .read_buffer = &self.tls_rd_buf,
+            .write_buffer = &self.tls_wr_buf,
+        });
+        self.tls_client = tls;
+
+        // Read IMAP greeting
+        var greet_buf: [1024]u8 = undefined;
+        _ = try tls.reader.readSliceShort(&greet_buf);
+
+        // LOGIN
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+        const cmd = try std.fmt.allocPrint(allocator, "{s} LOGIN \"{s}\" \"{s}\"\r\n", .{
+            tag, self.config.imap_user, self.config.imap_pass,
+        });
+        defer allocator.free(cmd);
+        try tls.writer.writeAll(cmd);
+        try tls.writer.flush();
+
+        const resp = try self.readResp(allocator, tag);
+        defer allocator.free(resp);
+
+        if (!mem.startsWith(u8, lastTaggedLine(resp, tag), "OK")) {
+            return error.ImapAuthFailed;
+        }
         self.authenticated = true;
     }
 
-    fn nextTag(self: *ImapClient) ![]const u8 {
-        self.tag_counter += 1;
-        return try std.fmt.allocPrint(self.allocator, "A{d}", .{self.tag_counter});
+    fn sendCmd(self: *ImapConn, allocator: mem.Allocator, cmd: []const u8) ![]u8 {
+        const tls = self.tls_client.?;
+        try tls.writer.writeAll(cmd);
+        try tls.writer.flush();
+
+        // Extract tag from command (first word)
+        const tag_end = mem.indexOfScalar(u8, cmd, ' ') orelse cmd.len;
+        const tag = cmd[0..tag_end];
+        return self.readResp(allocator, tag);
     }
 
-    fn sendCommand(self: *ImapClient, tag: []const u8, cmd: []const u8, cmd_args: []const []const u8) !void {
-        var wr_buf: [4096]u8 = undefined;
-        var wr = self.stream.?.writer(&wr_buf);
-        try wr.interface.print("{s} {s}", .{ tag, cmd });
-        for (cmd_args) |arg| {
-            try wr.interface.print(" \"{s}\"", .{arg});
-        }
-        try wr.interface.writeAll("\r\n");
-        wr.interface.flush() catch {};
-    }
+    fn readResp(self: *ImapConn, allocator: mem.Allocator, tag: []const u8) ![]u8 {
+        const tls = self.tls_client.?;
+        var buf = std.array_list.Managed(u8).init(allocator);
+        var tmp: [8192]u8 = undefined;
 
-    fn readResponse(self: *ImapClient, tag: []const u8) ![]const u8 {
-        var result_buf: std.ArrayList(u8) = .{};
-        var rd_buf: [4096]u8 = undefined;
-        var rd = self.stream.?.reader(&rd_buf);
-        const rdr = rd.interface();
         while (true) {
-            const line = rdr.takeDelimiter('\n') catch break orelse break;
-            try result_buf.appendSlice(self.allocator, line);
-            try result_buf.append(self.allocator, '\n');
-            if (mem.startsWith(u8, line, tag)) break;
+            const n = tls.reader.readSliceShort(&tmp) catch break;
+            if (n == 0) break;
+            try buf.appendSlice(tmp[0..n]);
+            // Check for tagged response line ending
+            const data = buf.items;
+            if (mem.indexOf(u8, data, tag) != null) {
+                // Look for the end of the tagged line
+                if (mem.lastIndexOf(u8, data, "\r\n") != null or
+                    mem.lastIndexOf(u8, data, "\n") != null)
+                {
+                    // Make sure the tagged line itself is complete
+                    const tag_pos = mem.lastIndexOf(u8, data, tag) orelse continue;
+                    const after_tag = data[tag_pos..];
+                    if (mem.indexOf(u8, after_tag, "\r\n") != null or
+                        mem.indexOf(u8, after_tag, "\n") != null)
+                    {
+                        break;
+                    }
+                }
+            }
+            if (buf.items.len > 16 * 1024 * 1024) break; // 16MB safety limit
         }
-        return result_buf.toOwnedSlice(self.allocator);
+        return buf.toOwnedSlice();
     }
 
-    pub fn listFolders(self: *ImapClient) !json.Value {
-        try self.ensureConnected();
-        const tag = try self.nextTag();
-        try self.sendCommand(tag, "LIST", &.{ "", "*" });
-        const resp = try self.readResponse(tag);
-        defer self.allocator.free(resp);
+    fn lastTaggedLine(resp: []const u8, tag: []const u8) []const u8 {
+        var lines = mem.splitScalar(u8, resp, '\n');
+        var last: []const u8 = "";
+        while (lines.next()) |line| {
+            const trimmed = mem.trimRight(u8, line, "\r");
+            if (mem.startsWith(u8, trimmed, tag)) last = trimmed[tag.len + 1 ..];
+        }
+        return last;
+    }
 
-        var list = json.Array.init(self.allocator);
+    pub fn listFolders(self: *ImapConn, allocator: mem.Allocator) !json.Value {
+        try self.ensureConnected(allocator);
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+
+        const cmd = try std.fmt.allocPrint(allocator, "{s} LIST \"\" \"*\"\r\n", .{tag});
+        defer allocator.free(cmd);
+        const resp = try self.sendCmd(allocator, cmd);
+        defer allocator.free(resp);
+
+        var list = json.Array.init(allocator);
         var lines = mem.splitScalar(u8, resp, '\n');
         while (lines.next()) |line| {
-            if (mem.startsWith(u8, line, "* LIST")) {
-                // Parse folder name
-                const last_quote = mem.lastIndexOfScalar(u8, line, '"') orelse continue;
-                const prev_quote = mem.lastIndexOfScalar(u8, line[0..last_quote], '"') orelse continue;
-                const folder_name = line[prev_quote + 1 .. last_quote];
-                try list.append(json.Value{ .string = try self.allocator.dupe(u8, folder_name) });
-            }
+            const trimmed = mem.trimRight(u8, line, "\r");
+            if (!mem.startsWith(u8, trimmed, "* LIST")) continue;
+            const lq = mem.lastIndexOfScalar(u8, trimmed, '"') orelse continue;
+            const pq = mem.lastIndexOfScalar(u8, trimmed[0..lq], '"') orelse continue;
+            try list.append(json.Value{ .string = try allocator.dupe(u8, trimmed[pq + 1 .. lq]) });
         }
 
-        var result = json.ObjectMap.init(self.allocator);
+        var result = json.ObjectMap.init(allocator);
         try result.put("folders", json.Value{ .array = list });
         return json.Value{ .object = result };
     }
 
-    pub fn searchMessages(self: *ImapClient, query: []const u8) !json.Value {
-        try self.ensureConnected();
-        const tag = try self.nextTag();
-        // Assume INBOX for now
-        try self.sendCommand(tag, "SELECT", &.{"INBOX"});
-        _ = try self.readResponse(tag);
+    pub fn searchMessages(self: *ImapConn, allocator: mem.Allocator, folder: []const u8, query: []const u8) !json.Value {
+        try self.ensureConnected(allocator);
 
-        const stag = try self.nextTag();
-        try self.sendCommand(stag, "SEARCH", &.{query});
-        const resp = try self.readResponse(stag);
-        defer self.allocator.free(resp);
+        // SELECT
+        const stag = try self.nextTag(allocator);
+        defer allocator.free(stag);
+        const scmd = try std.fmt.allocPrint(allocator, "{s} SELECT \"{s}\"\r\n", .{ stag, folder });
+        defer allocator.free(scmd);
+        const sresp = try self.sendCmd(allocator, scmd);
+        defer allocator.free(sresp);
 
-        var list = json.Array.init(self.allocator);
+        // SEARCH
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+        const cmd = try std.fmt.allocPrint(allocator, "{s} SEARCH {s}\r\n", .{ tag, query });
+        defer allocator.free(cmd);
+        const resp = try self.sendCmd(allocator, cmd);
+        defer allocator.free(resp);
+
+        var list = json.Array.init(allocator);
         var lines = mem.splitScalar(u8, resp, '\n');
         while (lines.next()) |line| {
-            if (mem.startsWith(u8, line, "* SEARCH")) {
-                var parts = mem.splitScalar(u8, line[9..], ' ');
-                while (parts.next()) |part| {
-                    if (part.len > 0) try list.append(json.Value{ .string = try self.allocator.dupe(u8, part) });
-                }
+            const trimmed = mem.trimRight(u8, line, "\r");
+            if (!mem.startsWith(u8, trimmed, "* SEARCH")) continue;
+            var parts = mem.splitScalar(u8, mem.trim(u8, trimmed[8..], " "), ' ');
+            while (parts.next()) |part| {
+                if (part.len > 0) try list.append(json.Value{ .string = try allocator.dupe(u8, part) });
             }
         }
 
-        var result = json.ObjectMap.init(self.allocator);
+        var result = json.ObjectMap.init(allocator);
         try result.put("uids", json.Value{ .array = list });
+        try result.put("folder", json.Value{ .string = try allocator.dupe(u8, folder) });
         return json.Value{ .object = result };
     }
 
-    pub fn getMessage(self: *ImapClient, uid: []const u8) !json.Value {
-        try self.ensureConnected();
-        const tag = try self.nextTag();
-        try self.sendCommand(tag, "FETCH", &.{ uid, "RFC822" });
-        const resp = try self.readResponse(tag);
-        defer self.allocator.free(resp);
+    pub fn getMessage(self: *ImapConn, allocator: mem.Allocator, folder: []const u8, uid: []const u8) !json.Value {
+        try self.ensureConnected(allocator);
 
-        var result = json.ObjectMap.init(self.allocator);
-        try result.put("raw", json.Value{ .string = try self.allocator.dupe(u8, resp) });
+        const stag = try self.nextTag(allocator);
+        defer allocator.free(stag);
+        const scmd = try std.fmt.allocPrint(allocator, "{s} SELECT \"{s}\"\r\n", .{ stag, folder });
+        defer allocator.free(scmd);
+        const sresp = try self.sendCmd(allocator, scmd);
+        defer allocator.free(sresp);
+
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+        const cmd = try std.fmt.allocPrint(allocator, "{s} UID FETCH {s} (FLAGS BODY[])\r\n", .{ tag, uid });
+        defer allocator.free(cmd);
+        const resp = try self.sendCmd(allocator, cmd);
+        defer allocator.free(resp);
+
+        var result = json.ObjectMap.init(allocator);
+        try result.put("uid", json.Value{ .string = try allocator.dupe(u8, uid) });
+        try result.put("raw", json.Value{ .string = try allocator.dupe(u8, resp) });
         return json.Value{ .object = result };
     }
-};
 
-const SmtpClient = struct {
-    // Implement SMTP with STARTTLS from scratch
+    pub fn deleteMessage(self: *ImapConn, allocator: mem.Allocator, folder: []const u8, uid: []const u8) !void {
+        try self.ensureConnected(allocator);
+
+        const stag = try self.nextTag(allocator);
+        defer allocator.free(stag);
+        const scmd = try std.fmt.allocPrint(allocator, "{s} SELECT \"{s}\"\r\n", .{ stag, folder });
+        defer allocator.free(scmd);
+        const sresp = try self.sendCmd(allocator, scmd);
+        defer allocator.free(sresp);
+
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+        const cmd = try std.fmt.allocPrint(allocator, "{s} UID STORE {s} +FLAGS (\\Deleted)\r\n", .{ tag, uid });
+        defer allocator.free(cmd);
+        const resp = try self.sendCmd(allocator, cmd);
+        defer allocator.free(resp);
+
+        const etag = try self.nextTag(allocator);
+        defer allocator.free(etag);
+        const ecmd = try std.fmt.allocPrint(allocator, "{s} EXPUNGE\r\n", .{etag});
+        defer allocator.free(ecmd);
+        const eresp = try self.sendCmd(allocator, ecmd);
+        defer allocator.free(eresp);
+    }
+
+    pub fn moveMessage(self: *ImapConn, allocator: mem.Allocator, folder: []const u8, uid: []const u8, destination: []const u8) !void {
+        try self.ensureConnected(allocator);
+
+        const stag = try self.nextTag(allocator);
+        defer allocator.free(stag);
+        const scmd = try std.fmt.allocPrint(allocator, "{s} SELECT \"{s}\"\r\n", .{ stag, folder });
+        defer allocator.free(scmd);
+        const sresp = try self.sendCmd(allocator, scmd);
+        defer allocator.free(sresp);
+
+        // Try UID MOVE (RFC 6851)
+        const tag = try self.nextTag(allocator);
+        defer allocator.free(tag);
+        const cmd = try std.fmt.allocPrint(allocator, "{s} UID MOVE {s} \"{s}\"\r\n", .{ tag, uid, destination });
+        defer allocator.free(cmd);
+        const resp = try self.sendCmd(allocator, cmd);
+        defer allocator.free(resp);
+
+        // Fallback: COPY + delete if MOVE not supported
+        const tagged = lastTaggedLine(resp, tag);
+        if (!mem.startsWith(u8, tagged, "OK")) {
+            const ctag = try self.nextTag(allocator);
+            defer allocator.free(ctag);
+            const ccmd = try std.fmt.allocPrint(allocator, "{s} UID COPY {s} \"{s}\"\r\n", .{ ctag, uid, destination });
+            defer allocator.free(ccmd);
+            const cresp = try self.sendCmd(allocator, ccmd);
+            defer allocator.free(cresp);
+            try self.deleteMessage(allocator, folder, uid);
+        }
+    }
 };
