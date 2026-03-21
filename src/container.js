@@ -5,14 +5,14 @@ export class McpContainer extends Container {
 	sleepAfter = "5m";
 
 	onStart() {
-		console.log("purelymail-mcp-server container started");
+		console.log("unthinkmail container started");
 	}
 
 	onStop() {
-		console.log("purelymail-mcp-server container stopped");
+		console.log("unthinkmail container stopped");
 	}
 
 	onError(error) {
-		console.error("purelymail-mcp-server error:", error);
+		console.error("unthinkmail container error:", error);
 	}
 }

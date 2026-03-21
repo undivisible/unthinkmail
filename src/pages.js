@@ -174,18 +174,40 @@ let token=localStorage.getItem('um_token');
 function $(id){return document.getElementById(id)}
 
 function msg(target,text,ok){
-  const el=$(target);
+  var el=$(target);
   el.className='msg '+(ok?'msg-ok':'msg-err');
   el.textContent=text;
-  setTimeout(function(){el.className='';el.textContent=''},5000);
+  el.style.display='block';
+  setTimeout(function(){el.className='';el.textContent='';el.style.display=''},5000);
+}
+
+function setStatus(elId,text,color){
+  var el=$(elId);
+  el.textContent='';
+  var p=document.createElement('p');
+  p.style.color=color||'#555';
+  p.textContent=text;
+  el.appendChild(p);
+}
+
+function doLogout(){
+  token=null;
+  localStorage.removeItem('um_token');
+  $('auth').style.display='';
+  $('auth').className='center';
+  $('hub').style.display='none';
+  $('hub').className='hide';
+  $('auth-email').value='';
+  $('auth-pass').value='';
 }
 
 async function api(path,opts){
   opts=opts||{};
-  const h={'Content-Type':'application/json'};
+  var h={'Content-Type':'application/json'};
   if(token)h['Authorization']='Bearer '+token;
-  const r=await fetch(API+path,Object.assign({},opts,{headers:Object.assign(h,opts.headers||{})}));
-  const d=await r.json().catch(function(){return {}});
+  var r=await fetch(API+path,Object.assign({},opts,{headers:Object.assign(h,opts.headers||{})}));
+  var d=await r.json().catch(function(){return {}});
+  if(r.status===401){doLogout();throw new Error('session expired — please sign in again')}
   if(!r.ok)throw new Error(d.error||'Request failed');
   return d;
 }
@@ -195,9 +217,8 @@ function showTab(name){
   tabs.forEach(function(t){
     $('tab-'+t).style.display=(t===name)?'block':'none';
   });
-  var tabEls=document.querySelectorAll('.tab');
-  tabEls.forEach(function(el,i){
-    if(tabs[i]===name){el.className='tab active'}else{el.className='tab'}
+  document.querySelectorAll('.tab').forEach(function(el,i){
+    el.className=(tabs[i]===name)?'tab active':'tab';
   });
   if(name==='keys')loadKeys();
   if(name==='creds')loadCreds();
@@ -209,20 +230,27 @@ function showTab(name){
 }
 
 async function doRegister(){
+  var email=$('auth-email').value.trim();
+  var pass=$('auth-pass').value;
+  if(!email||!pass){msg('auth-msg','email and password required',false);return}
   try{
-    await api('/api/auth/register',{method:'POST',body:JSON.stringify({email:$('auth-email').value,password:$('auth-pass').value})});
-    msg('auth-msg','account created',true);
+    await api('/api/auth/register',{method:'POST',body:JSON.stringify({email:email,password:pass})});
+    msg('auth-msg','account created — signing in',true);
     await doLogin();
   }catch(e){msg('auth-msg',e.message,false)}
 }
+
 async function doLogin(){
+  var email=$('auth-email').value.trim();
+  var pass=$('auth-pass').value;
+  if(!email||!pass){msg('auth-msg','email and password required',false);return}
   try{
-    var d=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:$('auth-email').value,password:$('auth-pass').value})});
-    token=d.token;localStorage.setItem('um_token',token);
+    var d=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email:email,password:pass})});
+    token=d.token;
+    localStorage.setItem('um_token',token);
     enterHub();
   }catch(e){msg('auth-msg',e.message,false)}
 }
-function doLogout(){token=null;localStorage.removeItem('um_token');$('auth').style.display='';$('auth').className='center';$('hub').style.display='none'}
 
 function enterHub(){
   $('auth').style.display='none';
@@ -234,35 +262,48 @@ function enterHub(){
 async function loadCreds(){
   try{
     var d=await api('/api/credentials');
-    $('creds-status').textContent='';
-    var p=document.createElement('p');
-    p.style.color='#4a5';
-    p.textContent='connected: '+d.imap_user+' @ '+d.imap_host+':'+d.imap_port;
-    $('creds-status').appendChild(p);
+    setStatus('creds-status','connected: '+d.imap_user+' @ '+d.imap_host+':'+d.imap_port,'#4a5');
     $('c-imap-host').value=d.imap_host||'';
     $('c-imap-port').value=d.imap_port||'';
+    $('c-smtp-host').value='';
+    $('c-smtp-port').value='';
     $('c-user').value=d.imap_user||'';
+    $('c-pass').value='';
   }catch(e){
-    $('creds-status').textContent='';
-    var p=document.createElement('p');
-    p.style.color='#555';
-    p.textContent='no credentials stored yet';
-    $('creds-status').appendChild(p);
+    if(e.message!=='session expired — please sign in again')
+      setStatus('creds-status','no credentials stored yet','#555');
   }
 }
+
 async function saveCreds(){
+  var imapHost=$('c-imap-host').value.trim();
+  var imapPort=parseInt($('c-imap-port').value)||993;
+  var smtpHost=$('c-smtp-host').value.trim();
+  var smtpPort=parseInt($('c-smtp-port').value)||465;
+  var user=$('c-user').value.trim();
+  var pass=$('c-pass').value;
+  if(!imapHost||!smtpHost||!user||!pass){msg('hub-msg','all fields required to save credentials',false);return}
   try{
     await api('/api/credentials',{method:'PUT',body:JSON.stringify({
-      imap_host:$('c-imap-host').value,imap_port:parseInt($('c-imap-port').value)||993,
-      imap_user:$('c-user').value,imap_pass:$('c-pass').value,
-      smtp_host:$('c-smtp-host').value,smtp_port:parseInt($('c-smtp-port').value)||465
+      imap_host:imapHost,imap_port:imapPort,
+      imap_user:user,imap_pass:pass,
+      smtp_host:smtpHost,smtp_port:smtpPort
     })});
-    msg('hub-msg','credentials saved',true);loadCreds();$('c-pass').value='';
+    msg('hub-msg','credentials saved',true);
+    loadCreds();
   }catch(e){msg('hub-msg',e.message,false)}
 }
+
 async function deleteCreds(){
   if(!confirm('remove stored credentials?'))return;
-  try{await api('/api/credentials',{method:'DELETE'});msg('hub-msg','credentials removed',true);loadCreds()}catch(e){msg('hub-msg',e.message,false)}
+  try{
+    await api('/api/credentials',{method:'DELETE'});
+    msg('hub-msg','credentials removed',true);
+    setStatus('creds-status','no credentials stored yet','#555');
+    $('c-imap-host').value='';$('c-imap-port').value='';
+    $('c-smtp-host').value='';$('c-smtp-port').value='';
+    $('c-user').value='';$('c-pass').value='';
+  }catch(e){msg('hub-msg',e.message,false)}
 }
 
 async function loadKeys(){
@@ -270,7 +311,10 @@ async function loadKeys(){
     var d=await api('/api/keys');
     var el=$('keys-list');
     el.textContent='';
-    if(!d.keys||!d.keys.length){var p=document.createElement('p');p.className='sub';p.textContent='no api keys yet';el.appendChild(p);return}
+    if(!d.keys||!d.keys.length){
+      var p=document.createElement('p');p.className='sub';p.textContent='no api keys yet';el.appendChild(p);
+      return;
+    }
     d.keys.forEach(function(k){
       var row=document.createElement('div');row.className='key-row';
       var left=document.createElement('div');
@@ -281,28 +325,52 @@ async function loadKeys(){
       var right=document.createElement('div');right.className='row';
       var dt=document.createElement('span');dt.className='key-date';dt.textContent=new Date(k.created_at).toLocaleDateString();
       var btn=document.createElement('button');btn.className='btn-danger';btn.textContent='revoke';
-      btn.setAttribute('data-id',k.id);
-      btn.onclick=function(){deleteKey(this.getAttribute('data-id'))};
+      (function(id){btn.onclick=function(){deleteKey(id)}})(k.id);
       right.appendChild(dt);right.appendChild(btn);
       row.appendChild(left);row.appendChild(right);
       el.appendChild(row);
     });
-  }catch(e){$('keys-list').textContent=e.message}
+  }catch(e){
+    if(e.message!=='session expired — please sign in again')
+      $('keys-list').textContent=e.message;
+  }
 }
+
 async function createKey(){
   try{
     var d=await api('/api/keys',{method:'POST',body:JSON.stringify({label:$('key-label').value||null})});
     var el=$('new-key-display');
     el.textContent='new key (copy now — shown once): '+d.key;
     el.className='msg msg-ok mb';
-    $('key-label').value='';loadKeys();
+    el.style.display='block';
+    $('key-label').value='';
+    loadKeys();
   }catch(e){msg('hub-msg',e.message,false)}
 }
+
 async function deleteKey(id){
   if(!confirm('revoke this api key?'))return;
-  try{await api('/api/keys/'+id,{method:'DELETE'});loadKeys();msg('hub-msg','key revoked',true)}catch(e){msg('hub-msg',e.message,false)}
+  try{
+    await api('/api/keys/'+id,{method:'DELETE'});
+    msg('hub-msg','key revoked',true);
+    loadKeys();
+  }catch(e){msg('hub-msg',e.message,false)}
 }
 
-if(token){enterHub()}
+// Validate stored token before entering hub
+(async function init(){
+  if(!token)return;
+  try{
+    await api('/api/auth/me');
+    enterHub();
+  }catch(e){
+    token=null;
+    localStorage.removeItem('um_token');
+  }
+})();
+
+document.addEventListener('keydown',function(e){
+  if(e.key==='Enter'&&$('auth').style.display!=='none'){doLogin()}
+});
 </script>
 </body></html>`;

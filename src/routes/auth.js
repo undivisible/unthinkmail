@@ -1,8 +1,8 @@
-// Authentication routes: register and login
+// Authentication routes: register, login, me
 
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { createUser, getUserByEmail } from '../lib/db.js';
-import { createJwt } from '../lib/middleware.js';
+import { createJwt, authenticateJwt } from '../lib/middleware.js';
 import { json, jsonError } from '../index.js';
 
 export async function handleAuth(request, env) {
@@ -37,6 +37,15 @@ export async function handleAuth(request, env) {
     }
     const token = await createJwt({ sub: user.id, email: user.email }, env.JWT_SECRET);
     return json({ token });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+    try {
+      const user = await authenticateJwt(request, env);
+      return json({ id: user.userId, email: user.email });
+    } catch (e) {
+      return jsonError(e.message, 401);
+    }
   }
 
   return jsonError('Not found', 404);

@@ -53,7 +53,7 @@ export default {
       if (url.pathname === '/health') return json({ status: 'ok' });
 
       // Routes
-      if (url.pathname.startsWith('/api/auth/')) return handleAuth(request, env);
+      if (url.pathname.startsWith('/api/auth')) return handleAuth(request, env);
       if (url.pathname.startsWith('/api/keys')) return handleKeys(request, env);
       if (url.pathname.startsWith('/api/credentials')) return handleCredentials(request, env);
       if (url.pathname === '/mcp') return handleMcp(request, env);

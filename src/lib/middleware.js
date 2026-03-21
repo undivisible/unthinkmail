@@ -38,7 +38,7 @@ async function getHmacKey(secret) {
 export async function createJwt(payload, secret) {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
-  const fullPayload = { ...payload, iat: now, exp: now + 3600 };
+  const fullPayload = { ...payload, iat: now, exp: now + 604800 }; // 7 days
   const headerB64 = textToBase64url(JSON.stringify(header));
   const payloadB64 = textToBase64url(JSON.stringify(fullPayload));
   const signingInput = headerB64 + '.' + payloadB64;
