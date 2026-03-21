@@ -1,40 +1,36 @@
-// MCP proxy route: authenticate via API key, decrypt credentials, forward to container
+// MCP proxy: decrypt self-contained pm_ key → forward to container with credentials
 
-import { decryptCredentials } from '../lib/crypto.js';
-import { getCredentials } from '../lib/db.js';
-import { authenticateApiKey } from '../lib/middleware.js';
+import { decodeKey, credHash } from '../lib/crypto.js';
 import { json, jsonError } from '../index.js';
 
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
 export async function handleMcp(request, env) {
-  if (request.method !== 'POST') {
-    return jsonError('Method not allowed', 405);
-  }
+  if (request.method !== 'POST') return jsonError('Method not allowed', 405);
 
-  let user;
+  const auth = request.headers.get('Authorization') || '';
+  if (!auth.startsWith('Bearer pm_')) return jsonError('Missing or invalid API key', 401);
+
+  let credentials;
   try {
-    user = await authenticateApiKey(request, env);
-  } catch (e) {
-    return jsonError(e.message, 401);
+    credentials = await decodeKey(auth.slice(7), env.MASTER_ENCRYPTION_KEY);
+  } catch {
+    return jsonError('Invalid API key', 401);
   }
 
-  // Fetch encrypted credentials from D1
-  const record = await getCredentials(env.DB, user.userId);
-  if (!record) {
-    return jsonError('No credentials configured. Store credentials via PUT /api/credentials first.', 400);
-  }
+  const body = await request.json().catch(() => null);
+  if (!body) return jsonError('Invalid JSON body', 400);
 
-  // Decrypt all credential fields
-  const credentials = await decryptCredentials(env.MASTER_ENCRYPTION_KEY, user.userId, record);
-
-  // Parse the incoming JSON-RPC request
-  const body = await request.json();
-
-  // Inject credentials into the request for the container
-  const enrichedBody = { ...body, _credentials: credentials };
-
-  // Forward to the container via Durable Object stub
-  const id = env.MCP_CONTAINER.idFromName(user.userId);
+  // Route to a stable container per unique credential set
+  const hash = await credHash(credentials);
+  const id = env.MCP_CONTAINER.idFromName(hash);
   const stub = env.MCP_CONTAINER.get(id);
+
+  const enrichedBody = { ...body, _credentials: credentials };
 
   const containerResponse = await stub.fetch(new Request(request.url, {
     method: 'POST',
@@ -42,15 +38,9 @@ export async function handleMcp(request, env) {
     body: JSON.stringify(enrichedBody),
   }));
 
-  // Return the container's response with CORS headers
   const responseBody = await containerResponse.text();
   return new Response(responseBody, {
     status: containerResponse.status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    },
+    headers: { 'Content-Type': 'application/json', ...CORS },
   });
 }

@@ -1,135 +1,71 @@
-// Cryptographic utilities using Web Crypto API
+// Cryptographic utilities — self-contained credential keys
+// A pm_ key IS the encrypted credentials. No database needed.
 
-const IV_LENGTH = 12;
-const AES_KEY_LENGTH = 256;
+const b64url = (buf) =>
+  btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function arrayBufferToHex(buffer) {
-  return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-export function generateId() {
-  return crypto.randomUUID();
-}
-
-// --- OTP ---
-
-export function generateOtpCode() {
-  // 6-digit numeric code
-  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;
-  return String(n).padStart(6, '0');
-}
-
-export async function hashOtpCode(code) {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code));
-  return arrayBufferToHex(hash);
-}
-
-// --- API keys ---
-
-export async function hashApiKey(rawKey) {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawKey));
-  return arrayBufferToHex(hash);
-}
-
-export function generateApiKey() {
-  return 'pm_' + arrayBufferToHex(crypto.getRandomValues(new Uint8Array(16)).buffer);
-}
-
-// --- JWT (HS256) ---
-
-const BASE64URL = (buf) => {
-  const b = btoa(String.fromCharCode(...new Uint8Array(buf)));
-  return b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-
-const textToBase64url = (s) => BASE64URL(new TextEncoder().encode(s));
-
-const base64urlDecode = (s) => {
+const b64urlDecode = (s) => {
   let b = s.replace(/-/g, '+').replace(/_/g, '/');
   while (b.length % 4) b += '=';
-  const bin = atob(b);
-  return new Uint8Array([...bin].map(c => c.charCodeAt(0)));
+  return Uint8Array.from(atob(b), c => c.charCodeAt(0));
 };
 
-async function hmacKey(secret) {
-  return crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']
-  );
-}
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
-export async function createJwt(payload, secret) {
-  const now = Math.floor(Date.now() / 1000);
-  const full = { ...payload, iat: now, exp: now + 604800 }; // 7 days
-  const header = textToBase64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const body = textToBase64url(JSON.stringify(full));
-  const input = header + '.' + body;
-  const key = await hmacKey(secret);
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(input));
-  return input + '.' + BASE64URL(sig);
-}
-
-export async function verifyJwt(token, secret) {
-  const parts = token.split('.');
-  if (parts.length !== 3) throw new Error('Invalid token');
-  const [h, b, s] = parts;
-  const key = await hmacKey(secret);
-  const valid = await crypto.subtle.verify('HMAC', key, base64urlDecode(s), new TextEncoder().encode(h + '.' + b));
-  if (!valid) throw new Error('Invalid signature');
-  const payload = JSON.parse(new TextDecoder().decode(base64urlDecode(b)));
-  if (payload.exp < Math.floor(Date.now() / 1000)) throw new Error('Token expired');
-  return payload;
-}
-
-// --- Credential encryption (AES-256-GCM + HKDF) ---
-
-export async function deriveEncryptionKey(masterKeyBase64, userId) {
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw', new Uint8Array(base64ToArrayBuffer(masterKeyBase64)), 'HKDF', false, ['deriveKey']
-  );
+// Derive an AES-256-GCM key from the raw MASTER_ENCRYPTION_KEY string
+async function aesKey(masterKeyRaw) {
+  const raw = enc.encode(masterKeyRaw);
+  const keyMaterial = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode(userId) },
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('unthinkmail-v1') },
     keyMaterial,
-    { name: 'AES-GCM', length: AES_KEY_LENGTH }, false, ['encrypt', 'decrypt']
+    { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
   );
 }
 
-export async function encryptCredentials(masterKeyBase64, userId, credentialsObj) {
-  const key = await deriveEncryptionKey(masterKeyBase64, userId);
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const enc = new TextEncoder();
-  const encrypted = {};
-  for (const [field, value] of Object.entries(credentialsObj)) {
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(String(value)));
-    encrypted[field + '_enc'] = arrayBufferToBase64(ct);
-  }
-  encrypted.iv = arrayBufferToBase64(iv.buffer);
-  return encrypted;
+// Deterministic IV: HMAC-SHA256(masterKey, plaintext)[0:12]
+// Same credentials → same IV → same key every time
+async function deterministicIv(masterKeyRaw, plaintext) {
+  const hmacKey = await crypto.subtle.importKey(
+    'raw', enc.encode(masterKeyRaw), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', hmacKey, plaintext);
+  return new Uint8Array(sig).slice(0, 12);
 }
 
-export async function decryptCredentials(masterKeyBase64, userId, encryptedObj) {
-  const key = await deriveEncryptionKey(masterKeyBase64, userId);
-  const iv = new Uint8Array(base64ToArrayBuffer(encryptedObj.iv));
-  const dec = new TextDecoder();
-  const decrypted = {};
-  for (const [field, value] of Object.entries(encryptedObj)) {
-    if (['iv', 'id', 'user_id', 'created_at'].includes(field)) continue;
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, base64ToArrayBuffer(value));
-    decrypted[field.replace(/_enc$/, '')] = dec.decode(pt);
+// Encode credentials into a self-contained pm_ key
+export async function encodeKey(creds, masterKeyRaw) {
+  const plain = enc.encode(JSON.stringify(creds));
+  const key = await aesKey(masterKeyRaw);
+  const iv = await deterministicIv(masterKeyRaw, plain);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+  const buf = new Uint8Array(12 + ct.byteLength);
+  buf.set(iv, 0);
+  buf.set(new Uint8Array(ct), 12);
+  return 'pm_' + b64url(buf.buffer);
+}
+
+// Decode a pm_ key back into credentials
+export async function decodeKey(token, masterKeyRaw) {
+  if (!token.startsWith('pm_')) throw new Error('Invalid key format');
+  const buf = b64urlDecode(token.slice(3));
+  if (buf.length < 29) throw new Error('Key too short'); // 12 iv + 16 tag + 1 data min
+  const iv = buf.slice(0, 12);
+  const ct = buf.slice(12);
+  const key = await aesKey(masterKeyRaw);
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  } catch {
+    throw new Error('Invalid key');
   }
-  return decrypted;
+  return JSON.parse(dec.decode(plain));
+}
+
+// SHA-256 hex of credentials JSON — used as stable Durable Object ID
+export async function credHash(creds) {
+  const h = await crypto.subtle.digest('SHA-256', enc.encode(JSON.stringify(creds)));
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
 }

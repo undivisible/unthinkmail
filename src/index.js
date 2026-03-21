@@ -1,8 +1,5 @@
 import { McpContainer } from './container.js';
-import { handleAuth } from './routes/auth.js';
-import { handleMe } from './routes/me.js';
-import { handleKeys } from './routes/keys.js';
-import { handleCredentials } from './routes/credentials.js';
+import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
 import { LANDING, HUB } from './pages.js';
 
@@ -10,7 +7,7 @@ export { McpContainer };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
@@ -28,10 +25,6 @@ export function jsonError(message, status = 500) {
   });
 }
 
-function html(content) {
-  return new Response(content, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -41,14 +34,14 @@ export default {
     }
 
     try {
-      if (url.pathname === '/' && request.method === 'GET') return html(LANDING);
-      if (url.pathname === '/hub' && request.method === 'GET') return html(HUB);
+      if (url.pathname === '/' && request.method === 'GET') {
+        return new Response(LANDING, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+      }
+      if (url.pathname === '/hub' && request.method === 'GET') {
+        return new Response(HUB, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+      }
       if (url.pathname === '/health') return json({ status: 'ok' });
-
-      if (url.pathname.startsWith('/api/auth')) return handleAuth(request, env);
-      if (url.pathname === '/api/me') return handleMe(request, env);
-      if (url.pathname.startsWith('/api/keys')) return handleKeys(request, env);
-      if (url.pathname.startsWith('/api/credentials')) return handleCredentials(request, env);
+      if (url.pathname === '/api/key') return handleKey(request, env);
       if (url.pathname === '/mcp') return handleMcp(request, env);
 
       return jsonError('Not found', 404);

@@ -26,12 +26,4 @@
       "new_sqlite_classes": ["McpContainer"]
     }
   ],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "purelymail-mcp-db",
-      "database_id": "b6220534-97cb-4e2d-802a-5bd37cf901b7",
-      "migrations_dir": "migrations"
-    }
-  ]
 }
