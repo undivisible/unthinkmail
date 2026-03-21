@@ -552,8 +552,14 @@ const ImapConn = struct {
             tag, self.config.imap_user, self.config.imap_pass,
         });
         defer allocator.free(cmd);
-        try tls.writer.writeAll(cmd);
-        try tls.writer.flush();
+        tls.writer.writeAll(cmd) catch |e| {
+            std.log.err("IMAP: LOGIN writeAll failed: {}", .{e});
+            return error.ImapLoginWriteFailed;
+        };
+        tls.writer.flush() catch |e| {
+            std.log.err("IMAP: LOGIN flush failed: {}", .{e});
+            return error.ImapLoginFlushFailed;
+        };
 
         const resp = self.readResp(allocator, tag) catch |e| {
             std.log.err("IMAP: login response read failed: {}", .{e});
@@ -572,8 +578,14 @@ const ImapConn = struct {
 
     fn sendCmd(self: *ImapConn, allocator: mem.Allocator, cmd: []const u8) ![]u8 {
         const tls = self.tls_client.?;
-        try tls.writer.writeAll(cmd);
-        try tls.writer.flush();
+        tls.writer.writeAll(cmd) catch |e| {
+            std.log.err("IMAP: sendCmd writeAll failed: {}", .{e});
+            return error.ImapSendWriteFailed;
+        };
+        tls.writer.flush() catch |e| {
+            std.log.err("IMAP: sendCmd flush failed: {}", .{e});
+            return error.ImapSendFlushFailed;
+        };
 
         // Extract tag from command (first word)
         const tag_end = mem.indexOfScalar(u8, cmd, ' ') orelse cmd.len;
