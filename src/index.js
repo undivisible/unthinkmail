@@ -34,7 +34,7 @@ export default {
     }
 
     try {
-      if ((url.pathname === '/' || url.pathname === '/hub') && request.method === 'GET') {
+      if (url.pathname === '/' && request.method === 'GET') {
         return new Response(HUB, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
       }
       if (url.pathname === '/health') return json({ status: 'ok' });
