@@ -2,7 +2,7 @@ import { Container } from "@cloudflare/containers";
 
 export class McpContainer extends Container {
 	defaultPort = 8080;
-	sleepAfter = "5m";
+	sleepAfter = "10s";
 
 	onStart() {
 		console.log("unthinkmail container started");
