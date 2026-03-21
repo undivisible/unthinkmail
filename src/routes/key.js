@@ -22,6 +22,6 @@ export async function handleKey(request, env) {
     smtp_port: parseInt(body.smtp_port) || 465,
   };
 
-  const key = await encodeKey(creds, env.MASTER_ENCRYPTION_KEY);
+  const key = await encodeKey(creds);
   return json({ key });
 }

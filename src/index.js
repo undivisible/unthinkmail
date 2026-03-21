@@ -1,9 +1,9 @@
-import { McpContainer } from './container.js';
+import { ImapSession } from './session.js';
 import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
 import { HUB } from './pages.js';
 
-export { McpContainer };
+export { ImapSession };
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',

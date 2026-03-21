@@ -3,7 +3,6 @@
 // Worker injects "_credentials" field into every JSON-RPC request
 const std = @import("std");
 const json = std.json;
-const net = std.net;
 const mem = std.mem;
 
 const Config = struct {
@@ -38,7 +37,7 @@ const ServerState = struct {
 
 const ConnArg = struct {
     allocator: mem.Allocator,
-    conn: net.Server.Connection,
+    conn: std.net.Server.Connection,
     state: *ServerState,
 };
 
@@ -58,7 +57,7 @@ pub fn main() !void {
     var state = ServerState{ .allocator = allocator };
     defer state.deinit();
 
-    const address = try net.Address.parseIp("0.0.0.0", 8080);
+    const address = try std.net.Address.parseIp("0.0.0.0", 8080);
     var tcp_server = try address.listen(.{ .reuse_address = true });
     defer tcp_server.deinit();
 
@@ -81,7 +80,7 @@ pub fn main() !void {
 // Read/write buffer sizes for HTTP layer
 const HTTP_BUF = 65536;
 
-fn handleConn(allocator: mem.Allocator, conn: net.Server.Connection, state: *ServerState) !void {
+fn handleConn(allocator: mem.Allocator, conn: std.net.Server.Connection, state: *ServerState) !void {
     defer conn.stream.close();
 
     var rd_buf: [HTTP_BUF]u8 = undefined;
@@ -381,103 +380,34 @@ fn toolsCall(allocator: mem.Allocator, id: ?json.Value, imap: *ImapConn, config:
     }
 }
 
-// --- Network helpers ---
 
-// Non-blocking TCP connect with poll-based timeout (ms).
-// Falls back to blocking connect on platforms without SOCK_NONBLOCK.
-fn connectWithTimeout(allocator: mem.Allocator, host: []const u8, port: u16, timeout_ms: i32) !net.Stream {
-    const list = try net.getAddressList(allocator, host, port);
-    defer list.deinit();
-    if (list.addrs.len == 0) return error.UnknownHostName;
-
-    var last_err: anyerror = error.ConnectionRefused;
-    for (list.addrs) |addr| {
-        const sock_flags = std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK | std.posix.SOCK.CLOEXEC;
-        const sockfd = std.posix.socket(addr.any.family, sock_flags, std.posix.IPPROTO.TCP) catch |e| {
-            last_err = e;
-            continue;
-        };
-
-        // connect() on a non-blocking socket returns WouldBlock (EINPROGRESS) immediately
-        std.posix.connect(sockfd, &addr.any, addr.getOsSockLen()) catch |e| switch (e) {
-            error.WouldBlock => {}, // expected
-            else => { std.posix.close(sockfd); last_err = e; continue; },
-        };
-
-        // Wait for the socket to become writable (connect complete) or timeout
-        var pollfd = [1]std.posix.pollfd{.{
-            .fd = sockfd,
-            .events = std.posix.POLL.OUT | std.posix.POLL.ERR,
-            .revents = 0,
-        }};
-        const ready = std.posix.poll(&pollfd, timeout_ms) catch |e| {
-            std.posix.close(sockfd);
-            last_err = e;
-            continue;
-        };
-        if (ready == 0) {
-            std.posix.close(sockfd);
-            last_err = error.ConnectionTimedOut;
-            continue;
-        }
-
-        // Check for a socket-level error (connection refused, etc.)
-        var sock_err: i32 = 0;
-        std.posix.getsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.ERROR,
-            std.mem.asBytes(&sock_err)) catch {};
-        if (sock_err != 0) {
-            std.posix.close(sockfd);
-            last_err = error.ConnectionRefused;
-            continue;
-        }
-
-        // Restore blocking mode
-        const flags = std.posix.fcntl(sockfd, std.posix.F.GETFL, 0) catch 0;
-        _ = std.posix.fcntl(sockfd, std.posix.F.SETFL, flags & ~@as(usize, std.posix.SOCK.NONBLOCK)) catch {};
-
-        return net.Stream{ .handle = sockfd };
-    }
-    return last_err;
-}
-
-// Apply SO_RCVTIMEO + SO_SNDTIMEO so every subsequent read/write times out.
-fn setSocketTimeouts(fd: std.posix.fd_t, secs: i64) void {
-    const TimeVal = extern struct { sec: i64, usec: i64 };
-    const tv = TimeVal{ .sec = secs, .usec = 0 };
-    const bytes = std.mem.asBytes(&tv);
-    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, bytes) catch {};
-    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, bytes) catch {};
-}
-
-// --- IMAP connection ---
-// Stored on the heap so its address is stable (TLS client holds pointers into it)
-
-const TLS_MIN_BUF = std.crypto.tls.Client.min_buffer_len;
+// --- IMAP connection via openssl s_client subprocess ---
+// Using system OpenSSL avoids TLS compatibility issues with Zig's pure-Zig TLS
+// implementation. Each ImapConn spawns one openssl process; stdin/stdout are pipes.
 
 const ImapConn = struct {
     config: Config,
-    stream: ?net.Stream = null,
     authenticated: bool = false,
     tag_counter: usize = 0,
-    // Buffers must outlive the TLS client and stream reader/writer
-    raw_rd_buf: [TLS_MIN_BUF]u8 = undefined,
-    raw_wr_buf: [8192]u8 = undefined,
-    tls_rd_buf: [TLS_MIN_BUF]u8 = undefined,
-    tls_wr_buf: [8192]u8 = undefined,
-    // Allocated after connect (stored as pointer since Reader/Writer aren't moveable)
-    raw_reader: ?*net.Stream.Reader = null,
-    raw_writer: ?*net.Stream.Writer = null,
-    tls_client: ?*std.crypto.tls.Client = null,
+    child: ?std.process.Child = null,
 
     fn init(config: Config) ImapConn {
         return .{ .config = config };
     }
 
     fn deinit(self: *ImapConn, allocator: mem.Allocator) void {
-        if (self.tls_client) |c| allocator.destroy(c);
-        if (self.raw_writer) |w| allocator.destroy(w);
-        if (self.raw_reader) |r| allocator.destroy(r);
-        if (self.stream) |s| s.close();
+        _ = allocator;
+        self.killChild();
+    }
+
+    fn killChild(self: *ImapConn) void {
+        if (self.child) |*c| {
+            if (c.stdin) |f| f.close();
+            if (c.stdout) |f| f.close();
+            _ = c.wait() catch {};
+            self.child = null;
+            self.authenticated = false;
+        }
     }
 
     fn nextTag(self: *ImapConn, allocator: mem.Allocator) ![]u8 {
@@ -488,62 +418,39 @@ const ImapConn = struct {
     fn ensureConnected(self: *ImapConn, allocator: mem.Allocator) !void {
         if (self.authenticated) return;
 
-        // Clean up previous attempt
-        if (self.tls_client) |c| { allocator.destroy(c); self.tls_client = null; }
-        if (self.raw_writer) |w| { allocator.destroy(w); self.raw_writer = null; }
-        if (self.raw_reader) |r| { allocator.destroy(r); self.raw_reader = null; }
-        if (self.stream) |s| { s.close(); self.stream = null; }
+        self.killChild();
 
-        std.log.info("IMAP: connecting to {s}:{d}", .{ self.config.imap_host, self.config.imap_port });
+        const connect_str = try std.fmt.allocPrint(
+            allocator, "{s}:{d}", .{ self.config.imap_host, self.config.imap_port },
+        );
+        defer allocator.free(connect_str);
 
-        // TCP connect with 10-second timeout (non-blocking socket + poll)
-        self.stream = connectWithTimeout(allocator, self.config.imap_host, self.config.imap_port, 10_000) catch |e| {
-            std.log.err("IMAP: TCP connect failed: {}", .{e});
+        std.log.info("IMAP: spawning openssl s_client -> {s}", .{connect_str});
+
+        var child = std.process.Child.init(&.{
+            "openssl", "s_client",
+            "-connect", connect_str,
+            "-quiet",   // suppress SSL session info on stdout
+            "-crlf",    // translate LF to CRLF for IMAP commands
+        }, allocator);
+        child.stdin_behavior  = .Pipe;
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+
+        child.spawn() catch |e| {
+            std.log.err("IMAP: openssl spawn failed: {}", .{e});
             return error.ImapConnectFailed;
         };
+        self.child = child;
 
-        // Allocate reader and writer on heap (stable addresses for TLS to reference)
-        const rdr = try allocator.create(net.Stream.Reader);
-        rdr.* = self.stream.?.reader(&self.raw_rd_buf);
-        self.raw_reader = rdr;
-
-        const wtr = try allocator.create(net.Stream.Writer);
-        wtr.* = self.stream.?.writer(&self.raw_wr_buf);
-        self.raw_writer = wtr;
-
-        std.log.info("IMAP: TCP ok, scanning CA bundle", .{});
-
-        // TLS handshake
-        var bundle = std.crypto.Certificate.Bundle{};
-        bundle.rescan(allocator) catch |e| {
-            std.log.err("IMAP: CA bundle rescan failed: {}", .{e});
-            return error.ImapCaBundleFailed;
-        };
-        defer bundle.deinit(allocator);
-        std.log.info("IMAP: CA bundle ok ({d} certs), TLS handshake", .{bundle.map.count()});
-
-        const tls = try allocator.create(std.crypto.tls.Client);
-        tls.* = std.crypto.tls.Client.init(rdr.interface(), &wtr.interface, .{
-            .host = .{ .explicit = self.config.imap_host },
-            .ca = .{ .bundle = bundle },
-            .read_buffer = &self.tls_rd_buf,
-            .write_buffer = &self.tls_wr_buf,
-        }) catch |e| {
-            allocator.destroy(tls);
-            std.log.err("IMAP: TLS handshake failed: {}", .{e});
-            return error.ImapTlsFailed;
-        };
-        self.tls_client = tls;
-
-        std.log.info("IMAP: TLS ok, reading greeting", .{});
-
-        // Read IMAP greeting
-        var greet_buf: [1024]u8 = undefined;
-        const greet_n = tls.reader.readSliceShort(&greet_buf) catch |e| {
+            // Read greeting (first line from server)
+        const greeting = self.readLine(allocator) catch |e| {
             std.log.err("IMAP: greeting read failed: {}", .{e});
-            return error.ImapGreetingFailed;
+            self.killChild();
+            return error.ImapConnectFailed;
         };
-        std.log.info("IMAP: greeting ({d} bytes): {s}", .{ greet_n, greet_buf[0..@min(greet_n, 80)] });
+        defer allocator.free(greeting);
+        std.log.info("IMAP: greeting: {s}", .{greeting[0..@min(greeting.len, 80)]});
 
         // LOGIN
         const tag = try self.nextTag(allocator);
@@ -552,76 +459,85 @@ const ImapConn = struct {
             tag, self.config.imap_user, self.config.imap_pass,
         });
         defer allocator.free(cmd);
-        tls.writer.writeAll(cmd) catch |e| {
-            std.log.err("IMAP: LOGIN writeAll failed: {}", .{e});
-            return error.ImapLoginWriteFailed;
-        };
-        tls.writer.flush() catch |e| {
-            std.log.err("IMAP: LOGIN flush failed: {}", .{e});
-            return error.ImapLoginFlushFailed;
+
+        self.child.?.stdin.?.writeAll(cmd) catch |e| {
+            std.log.err("IMAP: LOGIN write failed: {}", .{e});
+            self.killChild();
+            return error.ImapConnectFailed;
         };
 
         const resp = self.readResp(allocator, tag) catch |e| {
-            std.log.err("IMAP: login response read failed: {}", .{e});
-            return error.ImapLoginReadFailed;
+            std.log.err("IMAP: login read failed: {}", .{e});
+            self.killChild();
+            return error.ImapConnectFailed;
         };
         defer allocator.free(resp);
 
         const tagged = lastTaggedLine(resp, tag);
-        std.log.info("IMAP: login response: {s}", .{tagged[0..@min(tagged.len, 60)]});
+        std.log.info("IMAP: login resp: {s}", .{tagged[0..@min(tagged.len, 60)]});
         if (!mem.startsWith(u8, tagged, "OK")) {
+            self.killChild();
             return error.ImapAuthFailed;
         }
         self.authenticated = true;
         std.log.info("IMAP: authenticated ok", .{});
     }
 
-    fn sendCmd(self: *ImapConn, allocator: mem.Allocator, cmd: []const u8) ![]u8 {
-        const tls = self.tls_client.?;
-        tls.writer.writeAll(cmd) catch |e| {
-            std.log.err("IMAP: sendCmd writeAll failed: {}", .{e});
-            return error.ImapSendWriteFailed;
-        };
-        tls.writer.flush() catch |e| {
-            std.log.err("IMAP: sendCmd flush failed: {}", .{e});
-            return error.ImapSendFlushFailed;
-        };
+    // Read one byte directly from the pipe (no buffering — kernel pipe retains state)
+    fn pipeByte(self: *ImapConn) !u8 {
+        const fd = self.child.?.stdout.?.handle;
+        var b: u8 = undefined;
+        const n = try std.posix.read(fd, @as(*[1]u8, &b));
+        if (n == 0) return error.EndOfStream;
+        return b;
+    }
 
-        // Extract tag from command (first word)
+    // Read a single line from stdout (up to \n, inclusive)
+    fn readLine(self: *ImapConn, allocator: mem.Allocator) ![]u8 {
+        var buf = std.ArrayListUnmanaged(u8){};
+        while (true) {
+            const byte = try self.pipeByte();
+            try buf.append(allocator, byte);
+            if (byte == '\n' or buf.items.len > 8192) break;
+        }
+        return buf.toOwnedSlice(allocator);
+    }
+
+    fn sendCmd(self: *ImapConn, allocator: mem.Allocator, cmd: []const u8) ![]u8 {
+        self.child.?.stdin.?.writeAll(cmd) catch |e| {
+            std.log.err("IMAP: sendCmd write failed: {}", .{e});
+            return e;
+        };
         const tag_end = mem.indexOfScalar(u8, cmd, ' ') orelse cmd.len;
         const tag = cmd[0..tag_end];
         return self.readResp(allocator, tag);
     }
 
     fn readResp(self: *ImapConn, allocator: mem.Allocator, tag: []const u8) ![]u8 {
-        const tls = self.tls_client.?;
-        var buf = std.array_list.Managed(u8).init(allocator);
-        var tmp: [8192]u8 = undefined;
+        var buf = std.ArrayListUnmanaged(u8){};
 
         while (true) {
-            const n = tls.reader.readSliceShort(&tmp) catch break;
-            if (n == 0) break;
-            try buf.appendSlice(tmp[0..n]);
-            // Check for tagged response line ending
-            const data = buf.items;
-            if (mem.indexOf(u8, data, tag) != null) {
-                // Look for the end of the tagged line
-                if (mem.lastIndexOf(u8, data, "\r\n") != null or
-                    mem.lastIndexOf(u8, data, "\n") != null)
-                {
-                    // Make sure the tagged line itself is complete
-                    const tag_pos = mem.lastIndexOf(u8, data, tag) orelse continue;
-                    const after_tag = data[tag_pos..];
-                    if (mem.indexOf(u8, after_tag, "\r\n") != null or
-                        mem.indexOf(u8, after_tag, "\n") != null)
-                    {
-                        break;
-                    }
-                }
+            // Read one line at a time
+            var line_buf: [65536]u8 = undefined;
+            var line_len: usize = 0;
+            while (line_len < line_buf.len) {
+                const byte = self.pipeByte() catch |e| {
+                    if (buf.items.len > 0) break; // partial response ok
+                    return e;
+                };
+                line_buf[line_len] = byte;
+                line_len += 1;
+                if (byte == '\n') break;
             }
-            if (buf.items.len > 16 * 1024 * 1024) break; // 16MB safety limit
+            if (line_len == 0) break;
+            try buf.appendSlice(allocator, line_buf[0..line_len]);
+
+            // Tagged response line signals end
+            const line = mem.trimRight(u8, line_buf[0..line_len], "\r\n");
+            if (line.len > tag.len and mem.startsWith(u8, line, tag) and line[tag.len] == ' ') break;
+            if (buf.items.len > 16 * 1024 * 1024) break;
         }
-        return buf.toOwnedSlice();
+        return buf.toOwnedSlice(allocator);
     }
 
     fn lastTaggedLine(resp: []const u8, tag: []const u8) []const u8 {

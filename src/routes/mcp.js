@@ -1,7 +1,7 @@
-// MCP proxy: decrypt self-contained um_ key → forward to container with credentials
+// MCP proxy: decrypt self-contained um_ key → forward to ImapSession DO
 
 import { decodeKey, credHash } from '../lib/crypto.js';
-import { json, jsonError } from '../index.js';
+import { jsonError } from '../index.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -10,6 +10,13 @@ const CORS = {
 };
 
 export async function handleMcp(request, env) {
+  // MCP clients probe with GET to validate the server URL
+  if (request.method === 'GET') {
+    return new Response(
+      JSON.stringify({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' }),
+      { status: 200, headers: { 'Content-Type': 'application/json', ...CORS } }
+    );
+  }
   if (request.method !== 'POST') return jsonError('Method not allowed', 405);
 
   const auth = request.headers.get('Authorization') || '';
@@ -17,7 +24,7 @@ export async function handleMcp(request, env) {
 
   let credentials;
   try {
-    credentials = await decodeKey(auth.slice(7), env.MASTER_ENCRYPTION_KEY);
+    credentials = await decodeKey(auth.slice(7));
   } catch {
     return jsonError('Invalid API key', 401);
   }
@@ -25,32 +32,32 @@ export async function handleMcp(request, env) {
   const body = await request.json().catch(() => null);
   if (!body) return jsonError('Invalid JSON body', 400);
 
-  // Route to a stable container per unique credential set
+  // Route to a stable ImapSession DO per unique credential set
   const hash = await credHash(credentials);
-  const id = env.MCP_CONTAINER.idFromName(hash);
-  const stub = env.MCP_CONTAINER.get(id);
+  const id = env.IMAP_SESSION.idFromName(hash);
+  const stub = env.IMAP_SESSION.get(id);
 
   const enrichedBody = { ...body, _credentials: credentials };
 
-  console.log('[mcp] method=%s calling container hash=%s', body.method, hash.slice(0, 8));
+  console.log('[mcp] method=%s routing to session hash=%s', body.method, hash.slice(0, 8));
 
-  let containerResponse;
+  let sessionResponse;
   try {
-    containerResponse = await stub.fetch(new Request(request.url, {
+    sessionResponse = await stub.fetch(new Request('https://do/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(enrichedBody),
     }));
   } catch (e) {
-    console.error('[mcp] container fetch error:', e?.message ?? e);
-    return jsonError('Container error: ' + (e?.message ?? 'unknown'), 502);
+    console.error('[mcp] session error:', e?.message ?? e);
+    return jsonError('Session error: ' + (e?.message ?? 'unknown'), 502);
   }
 
-  console.log('[mcp] container responded status=%d', containerResponse.status);
+  console.log('[mcp] session responded status=%d', sessionResponse.status);
 
-  const responseBody = await containerResponse.text();
+  const responseBody = await sessionResponse.text();
   return new Response(responseBody, {
-    status: containerResponse.status,
+    status: sessionResponse.status,
     headers: { 'Content-Type': 'application/json', ...CORS },
   });
 }

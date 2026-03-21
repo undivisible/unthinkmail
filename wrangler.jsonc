@@ -2,21 +2,15 @@
   "name": "unthinkmail",
   "main": "src/index.js",
   "compatibility_date": "2026-03-01",
+  "compatibility_flags": ["nodejs_compat"],
   "routes": [
     { "pattern": "unthinkmail.undivisible.dev/*", "zone_name": "undivisible.dev" }
-  ],
-  "containers": [
-    {
-      "class_name": "McpContainer",
-      "image": "./Dockerfile",
-      "max_instances": 3
-    }
   ],
   "durable_objects": {
     "bindings": [
       {
-        "name": "MCP_CONTAINER",
-        "class_name": "McpContainer"
+        "name": "IMAP_SESSION",
+        "class_name": "ImapSession"
       }
     ]
   },
@@ -24,6 +18,11 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["McpContainer"]
+    },
+    {
+      "tag": "v2",
+      "deleted_classes": ["McpContainer"],
+      "new_sqlite_classes": ["ImapSession"]
     }
   ],
   "observability": {
