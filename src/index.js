@@ -1,4 +1,5 @@
 import { McpContainer } from './container.js';
+import { handleAuth } from './routes/auth.js';
 import { handleMe } from './routes/me.js';
 import { handleKeys } from './routes/keys.js';
 import { handleCredentials } from './routes/credentials.js';
@@ -44,6 +45,7 @@ export default {
       if (url.pathname === '/hub' && request.method === 'GET') return html(HUB);
       if (url.pathname === '/health') return json({ status: 'ok' });
 
+      if (url.pathname.startsWith('/api/auth')) return handleAuth(request, env);
       if (url.pathname === '/api/me') return handleMe(request, env);
       if (url.pathname.startsWith('/api/keys')) return handleKeys(request, env);
       if (url.pathname.startsWith('/api/credentials')) return handleCredentials(request, env);

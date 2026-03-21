@@ -1,50 +1,83 @@
-// Authentication routes: register, login, me
+// Email OTP authentication
+// POST /api/auth/otp/request  — send 6-digit code via Purelymail SMTP
+// POST /api/auth/otp/verify   — verify code → return JWT
+// GET  /api/auth/me           — return user from JWT
 
-import { hashPassword, verifyPassword } from '../lib/crypto.js';
-import { createUser, getUserByEmail } from '../lib/db.js';
-import { createJwt, authenticateJwt } from '../lib/middleware.js';
+import { generateOtpCode, hashOtpCode, createJwt, verifyJwt } from '../lib/crypto.js';
+import { createOtp, verifyOtp, getRecentOtp, cleanExpiredOtps, getUserByEmail, createUser } from '../lib/db.js';
+import { sendOtpEmail } from '../lib/smtp.js';
 import { json, jsonError } from '../index.js';
+
+const OTP_TTL = 10 * 60;       // 10 minutes
+const RATE_WINDOW = 60;         // 1 OTP per email per minute
 
 export async function handleAuth(request, env) {
   const url = new URL(request.url);
 
-  if (request.method === 'POST' && url.pathname === '/api/auth/register') {
-    const body = await request.json();
-    if (!body.email || !body.password) {
-      return jsonError('email and password are required', 400);
+  // POST /api/auth/otp/request
+  if (request.method === 'POST' && url.pathname === '/api/auth/otp/request') {
+    const body = await request.json().catch(() => ({}));
+    const email = (body.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) return jsonError('Valid email required', 400);
+
+    // Rate limit
+    const windowStart = Math.floor(Date.now() / 1000) - RATE_WINDOW;
+    const recent = await getRecentOtp(env.DB, email, windowStart);
+    if (recent) return jsonError('Please wait a minute before requesting another code', 429);
+
+    const code = generateOtpCode();
+    const codeHash = await hashOtpCode(code);
+    const expiresAt = Math.floor(Date.now() / 1000) + OTP_TTL;
+
+    await createOtp(env.DB, email, codeHash, expiresAt);
+    cleanExpiredOtps(env.DB).catch(() => {});
+
+    if (env.SMTP_USER && env.SMTP_PASS) {
+      await sendOtpEmail({
+        smtpUser: env.SMTP_USER,
+        smtpPass: env.SMTP_PASS,
+        smtpHost: env.SMTP_HOST || 'smtp.purelymail.com',
+        smtpPort: env.SMTP_PORT || '465',
+        to: email,
+        code,
+      });
+    } else {
+      // Dev: log to console
+      console.log(`[unthinkmail OTP] ${email} → ${code}`);
     }
-    const existing = await getUserByEmail(env.DB, body.email);
-    if (existing) {
-      return jsonError('Email already registered', 409);
-    }
-    const passwordHash = await hashPassword(body.password);
-    const user = await createUser(env.DB, body.email, passwordHash);
-    return json({ id: user.id, email: user.email }, 201);
+
+    return json({ sent: true });
   }
 
-  if (request.method === 'POST' && url.pathname === '/api/auth/login') {
-    const body = await request.json();
-    if (!body.email || !body.password) {
-      return jsonError('email and password are required', 400);
-    }
-    const user = await getUserByEmail(env.DB, body.email);
-    if (!user) {
-      return jsonError('Invalid email or password', 401);
-    }
-    const valid = await verifyPassword(body.password, user.password_hash);
-    if (!valid) {
-      return jsonError('Invalid email or password', 401);
-    }
+  // POST /api/auth/otp/verify
+  if (request.method === 'POST' && url.pathname === '/api/auth/otp/verify') {
+    const body = await request.json().catch(() => ({}));
+    const email = (body.email || '').trim().toLowerCase();
+    const code = (body.code || '').trim().replace(/\s/g, '');
+    if (!email || !code) return jsonError('Email and code required', 400);
+
+    const codeHash = await hashOtpCode(code);
+    const valid = await verifyOtp(env.DB, email, codeHash);
+    if (!valid) return jsonError('Invalid or expired code', 401);
+
+    let user = await getUserByEmail(env.DB, email);
+    if (!user) user = await createUser(env.DB, email);
+
     const token = await createJwt({ sub: user.id, email: user.email }, env.JWT_SECRET);
     return json({ token });
   }
 
+  // GET /api/auth/me
   if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+    const auth = request.headers.get('Authorization') || '';
+    if (!auth.startsWith('Bearer ') || auth.startsWith('Bearer pm_')) {
+      return jsonError('Unauthenticated', 401);
+    }
     try {
-      const user = await authenticateJwt(request, env);
-      return json({ id: user.userId, email: user.email });
-    } catch (e) {
-      return jsonError(e.message, 401);
+      const payload = await verifyJwt(auth.slice(7), env.JWT_SECRET);
+      return json({ id: payload.sub, email: payload.email });
+    } catch {
+      return jsonError('Unauthenticated', 401);
     }
   }
 

@@ -2,6 +2,8 @@
 
 import { generateId } from './crypto.js';
 
+// --- Users ---
+
 export async function createUser(db, email) {
   const id = generateId();
   await db.prepare('INSERT INTO users (id, email) VALUES (?, ?)').bind(id, email).run();
@@ -11,6 +13,39 @@ export async function createUser(db, email) {
 export async function getUserByEmail(db, email) {
   return db.prepare('SELECT id, email, created_at FROM users WHERE email = ?').bind(email).first();
 }
+
+// --- OTPs ---
+
+export async function createOtp(db, email, codeHash, expiresAt) {
+  const id = generateId();
+  await db.prepare(
+    'INSERT INTO otps (id, email, code_hash, expires_at) VALUES (?, ?, ?, ?)'
+  ).bind(id, email, codeHash, expiresAt).run();
+  return id;
+}
+
+export async function getRecentOtp(db, email, sinceEpoch) {
+  return db.prepare(
+    'SELECT id FROM otps WHERE email = ? AND created_at >= datetime(?, \'unixepoch\') AND used = 0 ORDER BY created_at DESC LIMIT 1'
+  ).bind(email, sinceEpoch).first();
+}
+
+export async function verifyOtp(db, email, codeHash) {
+  const now = Math.floor(Date.now() / 1000);
+  const row = await db.prepare(
+    'SELECT id FROM otps WHERE email = ? AND code_hash = ? AND expires_at > ? AND used = 0 LIMIT 1'
+  ).bind(email, codeHash, now).first();
+  if (!row) return false;
+  await db.prepare('UPDATE otps SET used = 1 WHERE id = ?').bind(row.id).run();
+  return true;
+}
+
+export async function cleanExpiredOtps(db) {
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare('DELETE FROM otps WHERE expires_at < ? OR used = 1').bind(now - 3600).run();
+}
+
+// --- API keys ---
 
 export async function createApiKey(db, userId, keyHash, keyPrefix, label) {
   const id = generateId();
@@ -40,10 +75,13 @@ export async function deleteApiKey(db, id, userId) {
   return result.meta.changes > 0;
 }
 
+// --- Credentials ---
+
 export async function upsertCredentials(db, userId, encryptedFields) {
   const id = generateId();
   await db.prepare(
-    `INSERT OR REPLACE INTO credentials (id, user_id, imap_host_enc, imap_port_enc, imap_user_enc, imap_pass_enc, smtp_host_enc, smtp_port_enc, iv)
+    `INSERT OR REPLACE INTO credentials
+     (id, user_id, imap_host_enc, imap_port_enc, imap_user_enc, imap_pass_enc, smtp_host_enc, smtp_port_enc, iv)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, userId,
@@ -56,7 +94,7 @@ export async function upsertCredentials(db, userId, encryptedFields) {
 
 export async function getCredentials(db, userId) {
   return db.prepare(
-    'SELECT id, user_id, imap_host_enc, imap_port_enc, imap_user_enc, imap_pass_enc, smtp_host_enc, smtp_port_enc, iv, created_at FROM credentials WHERE user_id = ?'
+    'SELECT * FROM credentials WHERE user_id = ?'
   ).bind(userId).first();
 }
 
