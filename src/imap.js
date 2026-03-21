@@ -70,50 +70,20 @@ export class ImapClient {
     const tag = this.#tag();
     await this.#write(`${tag} UID FETCH ${uid} (BODY.PEEK[])\r\n`);
 
-    // Accumulate raw bytes until the tag OK/NO/BAD line appears.
-    // We do NOT use #readLine() here — that's what was consuming the data.
-    const tagMarker = enc.encode(`\r\n${tag} `);
+    let message = null;
     while (true) {
-      // Check if we already have the tag line in the buffer
-      if (this.#findBytes(this.#buf, tagMarker) >= 0) break;
-      if (this.#buf.length > 10 * 1024 * 1024) break;
-      const { done, value } = await this.#reader.read();
-      if (done) break;
-      const next = new Uint8Array(this.#buf.length + value.length);
-      next.set(this.#buf);
-      next.set(value, this.#buf.length);
-      this.#buf = next;
-    }
-
-    // Find the tag line position and consume everything up to it
-    const tagPos = this.#findBytes(this.#buf, tagMarker);
-    const responseBytes = tagPos >= 0 ? this.#buf.slice(0, tagPos) : this.#buf;
-    if (tagPos >= 0) {
-      // Advance past the tag line
-      const tagLineEnd = this.#findBytes(this.#buf, enc.encode('\n'), tagPos);
-      this.#buf = tagLineEnd >= 0 ? this.#buf.slice(tagLineEnd + 1) : new Uint8Array(0);
-    }
-
-    // Find {N} in the response bytes, read N bytes after the following \r\n
-    const responseStr = dec.decode(responseBytes);
-    const litMatch = responseStr.match(/\{(\d+)\}\r\n/);
-    if (!litMatch) {
-      return { uid, error: 'no_literal', preview: responseStr.slice(0, 500) };
-    }
-    const n = parseInt(litMatch[1], 10);
-    const litStart = responseStr.indexOf(litMatch[0]) + litMatch[0].length;
-    const message = responseStr.slice(litStart, litStart + n);
-    return { uid, message };
-  }
-
-  #findBytes(haystack, needle, from = 0) {
-    outer: for (let i = from; i <= haystack.length - needle.length; i++) {
-      for (let j = 0; j < needle.length; j++) {
-        if (haystack[i + j] !== needle[j]) continue outer;
+      const line = await this.#readLine();
+      if (line.startsWith(tag + ' ')) break;
+      const litMatch = line.trimEnd().match(/\{(\d+)\}$/);
+      if (litMatch) {
+        const n = parseInt(litMatch[1], 10);
+        const bytes = await this.#readBytes(n);
+        message = dec.decode(bytes);
       }
-      return i;
     }
-    return -1;
+
+    if (message === null) return { uid, error: 'no_literal' };
+    return { uid, message };
   }
 
   async deleteMessage(folder, uid) {

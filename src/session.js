@@ -30,35 +30,37 @@ export class ImapSession {
   }
 
   async fetch(request) {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS });
-    }
-
-    if (request.method === 'GET') {
-      return Response.json(
-        { name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' },
-        { headers: CORS }
-      );
-    }
-
-    const body = await request.json().catch(() => null);
-    if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400, headers: CORS });
-
-    // Update credentials if provided
-    if (body._credentials) {
-      const creds = body._credentials;
-      const changed = !this.#credentials ||
-        this.#credentials.imap_host !== creds.imap_host ||
-        this.#credentials.imap_user !== creds.imap_user ||
-        this.#credentials.imap_port !== creds.imap_port;
-      if (changed) {
-        await this.#disconnect();
+    return this.state.blockConcurrencyWhile(async () => {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: CORS });
       }
-      this.#credentials = creds;
-    }
 
-    const response = await this.#handleRpc(body);
-    return Response.json(response, { headers: CORS });
+      if (request.method === 'GET') {
+        return Response.json(
+          { name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' },
+          { headers: CORS }
+        );
+      }
+
+      const body = await request.json().catch(() => null);
+      if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400, headers: CORS });
+
+      // Update credentials if provided
+      if (body._credentials) {
+        const creds = body._credentials;
+        const changed = !this.#credentials ||
+          this.#credentials.imap_host !== creds.imap_host ||
+          this.#credentials.imap_user !== creds.imap_user ||
+          this.#credentials.imap_port !== creds.imap_port;
+        if (changed) {
+          await this.#disconnect();
+        }
+        this.#credentials = creds;
+      }
+
+      const response = await this.#handleRpc(body);
+      return Response.json(response, { headers: CORS });
+    });
   }
 
   async #ensureConnected() {
