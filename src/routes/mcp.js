@@ -1,4 +1,4 @@
-// MCP proxy: decrypt self-contained pm_ key → forward to container with credentials
+// MCP proxy: decrypt self-contained um_ key → forward to container with credentials
 
 import { decodeKey, credHash } from '../lib/crypto.js';
 import { json, jsonError } from '../index.js';
@@ -13,7 +13,7 @@ export async function handleMcp(request, env) {
   if (request.method !== 'POST') return jsonError('Method not allowed', 405);
 
   const auth = request.headers.get('Authorization') || '';
-  if (!auth.startsWith('Bearer pm_')) return jsonError('Missing or invalid API key', 401);
+  if (!auth.startsWith('Bearer um_')) return jsonError('Missing or invalid API key', 401);
 
   let credentials;
   try {

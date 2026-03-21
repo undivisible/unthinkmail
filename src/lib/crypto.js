@@ -1,5 +1,5 @@
 // Cryptographic utilities — self-contained credential keys
-// A pm_ key IS the encrypted credentials. No database needed.
+// A um_ key IS the encrypted credentials. No database needed.
 
 const b64url = (buf) =>
   btoa(String.fromCharCode(...new Uint8Array(buf)))
@@ -35,7 +35,7 @@ async function deterministicIv(masterKeyRaw, plaintext) {
   return new Uint8Array(sig).slice(0, 12);
 }
 
-// Encode credentials into a self-contained pm_ key
+// Encode credentials into a self-contained um_ key
 export async function encodeKey(creds, masterKeyRaw) {
   const plain = enc.encode(JSON.stringify(creds));
   const key = await aesKey(masterKeyRaw);
@@ -44,12 +44,12 @@ export async function encodeKey(creds, masterKeyRaw) {
   const buf = new Uint8Array(12 + ct.byteLength);
   buf.set(iv, 0);
   buf.set(new Uint8Array(ct), 12);
-  return 'pm_' + b64url(buf.buffer);
+  return 'um_' + b64url(buf.buffer);
 }
 
-// Decode a pm_ key back into credentials
+// Decode a um_ key back into credentials
 export async function decodeKey(token, masterKeyRaw) {
-  if (!token.startsWith('pm_')) throw new Error('Invalid key format');
+  if (!token.startsWith('um_')) throw new Error('Invalid key format');
   const buf = b64urlDecode(token.slice(3));
   if (buf.length < 29) throw new Error('Key too short'); // 12 iv + 16 tag + 1 data min
   const iv = buf.slice(0, 12);

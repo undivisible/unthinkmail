@@ -141,7 +141,7 @@ function hub() {
     get endpoint() { return 'https://unthinkmail.undivisible.dev/mcp'; },
 
     get claudeCfg() {
-      const k = this.key || 'pm_your_key_here';
+      const k = this.key || 'um_your_key_here';
       return JSON.stringify({
         mcpServers: {
           unthinkmail: { url: this.endpoint, headers: { Authorization: 'Bearer ' + k } }
