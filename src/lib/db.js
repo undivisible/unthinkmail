@@ -2,18 +2,14 @@
 
 import { generateId } from './crypto.js';
 
-export async function createUser(db, email, passwordHash) {
+export async function createUser(db, email) {
   const id = generateId();
-  await db.prepare(
-    'INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)'
-  ).bind(id, email, passwordHash).run();
+  await db.prepare('INSERT INTO users (id, email) VALUES (?, ?)').bind(id, email).run();
   return { id, email };
 }
 
 export async function getUserByEmail(db, email) {
-  return db.prepare(
-    'SELECT id, email, password_hash, created_at FROM users WHERE email = ?'
-  ).bind(email).first();
+  return db.prepare('SELECT id, email, created_at FROM users WHERE email = ?').bind(email).first();
 }
 
 export async function createApiKey(db, userId, keyHash, keyPrefix, label) {
@@ -32,7 +28,7 @@ export async function getApiKeyByHash(db, keyHash) {
 
 export async function listApiKeys(db, userId) {
   const { results } = await db.prepare(
-    'SELECT id, key_prefix, label, created_at FROM api_keys WHERE user_id = ?'
+    'SELECT id, key_prefix, label, created_at FROM api_keys WHERE user_id = ? ORDER BY created_at DESC'
   ).bind(userId).all();
   return results;
 }
@@ -50,14 +46,10 @@ export async function upsertCredentials(db, userId, encryptedFields) {
     `INSERT OR REPLACE INTO credentials (id, user_id, imap_host_enc, imap_port_enc, imap_user_enc, imap_pass_enc, smtp_host_enc, smtp_port_enc, iv)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
-    id,
-    userId,
-    encryptedFields.imap_host_enc,
-    encryptedFields.imap_port_enc,
-    encryptedFields.imap_user_enc,
-    encryptedFields.imap_pass_enc,
-    encryptedFields.smtp_host_enc,
-    encryptedFields.smtp_port_enc,
+    id, userId,
+    encryptedFields.imap_host_enc, encryptedFields.imap_port_enc,
+    encryptedFields.imap_user_enc, encryptedFields.imap_pass_enc,
+    encryptedFields.smtp_host_enc, encryptedFields.smtp_port_enc,
     encryptedFields.iv
   ).run();
 }
@@ -69,8 +61,6 @@ export async function getCredentials(db, userId) {
 }
 
 export async function deleteCredentials(db, userId) {
-  const result = await db.prepare(
-    'DELETE FROM credentials WHERE user_id = ?'
-  ).bind(userId).run();
+  const result = await db.prepare('DELETE FROM credentials WHERE user_id = ?').bind(userId).run();
   return result.meta.changes > 0;
 }
