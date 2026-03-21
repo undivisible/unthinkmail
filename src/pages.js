@@ -262,6 +262,16 @@ function hub() {
       } catch(e) { this.notify(e.message, false); }
     },
 
+    async revokeAllKeys() {
+      if (!confirm('revoke all API keys? existing MCP connections will stop working.')) return;
+      try {
+        const d = await this.api('/api/keys', { method: 'DELETE' });
+        this.newKey = null;
+        this.keys = [];
+        this.notify('all keys revoked — ' + (d.revoked || 0) + ' removed');
+      } catch(e) { this.notify(e.message, false); }
+    },
+
     async copy(text) {
       await navigator.clipboard.writeText(text);
       this.notify('copied');
@@ -458,6 +468,16 @@ export const HUB = `<!DOCTYPE html>
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- Security reset -->
+    <div x-show="keys.length > 0" class="mt-6 pt-4 border-t border-border/50">
+      <p class="text-xs uppercase tracking-widest text-dim mb-2">security reset</p>
+      <p class="text-xs text-muted mb-3">revoke all keys if you think your access has been compromised. to change your email, just sign out and sign in with a different address.</p>
+      <button @click="revokeAllKeys()"
+        class="text-xs border border-red-950 text-red-950 px-3 py-1.5 rounded hover:text-red-500 hover:bg-red-950/20 transition-colors">
+        revoke all keys
+      </button>
     </div>
   </div>
 

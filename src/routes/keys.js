@@ -1,7 +1,7 @@
 // API key management routes
 
 import { generateApiKey, hashApiKey } from '../lib/crypto.js';
-import { createApiKey, listApiKeys, deleteApiKey } from '../lib/db.js';
+import { createApiKey, listApiKeys, deleteApiKey, deleteAllApiKeys } from '../lib/db.js';
 import { authenticateUser } from '../lib/middleware.js';
 import { json, jsonError } from '../index.js';
 
@@ -26,6 +26,12 @@ export async function handleKeys(request, env) {
   if (request.method === 'GET' && url.pathname === '/api/keys') {
     const keys = await listApiKeys(env.DB, user.userId);
     return json({ keys });
+  }
+
+  // DELETE /api/keys — revoke all keys (security reset)
+  if (request.method === 'DELETE' && url.pathname === '/api/keys') {
+    const count = await deleteAllApiKeys(env.DB, user.userId);
+    return json({ revoked: count });
   }
 
   const deleteMatch = url.pathname.match(/^\/api\/keys\/([^/]+)$/);

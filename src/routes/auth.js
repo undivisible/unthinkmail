@@ -4,12 +4,13 @@
 // GET  /api/auth/me           — return user from JWT
 
 import { generateOtpCode, hashOtpCode, createJwt, verifyJwt } from '../lib/crypto.js';
-import { createOtp, verifyOtp, getRecentOtp, cleanExpiredOtps, getUserByEmail, createUser } from '../lib/db.js';
+import { createOtp, verifyOtp, getRecentOtp, cleanExpiredOtps, getUserByEmail, createUser, countRecentFailedVerifies, recordOtpAttempt } from '../lib/db.js';
 import { sendOtpEmail } from '../lib/smtp.js';
 import { json, jsonError } from '../index.js';
 
-const OTP_TTL = 10 * 60;       // 10 minutes
-const RATE_WINDOW = 60;         // 1 OTP per email per minute
+const OTP_TTL = 10 * 60;          // 10 minutes
+const RATE_WINDOW = 60;            // 1 OTP request per email per minute
+const MAX_VERIFY_ATTEMPTS = 5;    // max failed verifies per 10 min window
 
 export async function handleAuth(request, env) {
   const url = new URL(request.url);
@@ -56,8 +57,18 @@ export async function handleAuth(request, env) {
     const code = (body.code || '').trim().replace(/\s/g, '');
     if (!email || !code) return jsonError('Email and code required', 400);
 
+    // Rate limit failed verify attempts (prevent 6-digit brute force)
+    const attemptWindow = Math.floor(Date.now() / 1000) - OTP_TTL;
+    const failCount = await countRecentFailedVerifies(env.DB, email, attemptWindow);
+    if (failCount >= MAX_VERIFY_ATTEMPTS) {
+      return jsonError('Too many failed attempts. Request a new code.', 429);
+    }
+
     const codeHash = await hashOtpCode(code);
     const valid = await verifyOtp(env.DB, email, codeHash);
+
+    recordOtpAttempt(env.DB, email, valid).catch(() => {});
+
     if (!valid) return jsonError('Invalid or expired code', 401);
 
     let user = await getUserByEmail(env.DB, email);

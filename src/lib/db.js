@@ -30,6 +30,22 @@ export async function getRecentOtp(db, email, sinceEpoch) {
   ).bind(email, sinceEpoch).first();
 }
 
+// Count recent failed verify attempts for an email (to rate-limit brute force)
+export async function countRecentFailedVerifies(db, email, sinceEpoch) {
+  const row = await db.prepare(
+    'SELECT COUNT(*) as n FROM otp_attempts WHERE email = ? AND attempted_at >= ? AND succeeded = 0'
+  ).bind(email, sinceEpoch).first();
+  return row?.n ?? 0;
+}
+
+export async function recordOtpAttempt(db, email, succeeded) {
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare(
+    'INSERT INTO otp_attempts (id, email, attempted_at, succeeded) VALUES (?, ?, ?, ?)'
+  ).bind(id, email, now, succeeded ? 1 : 0).run();
+}
+
 export async function verifyOtp(db, email, codeHash) {
   const now = Math.floor(Date.now() / 1000);
   const row = await db.prepare(
@@ -73,6 +89,11 @@ export async function deleteApiKey(db, id, userId) {
     'DELETE FROM api_keys WHERE id = ? AND user_id = ?'
   ).bind(id, userId).run();
   return result.meta.changes > 0;
+}
+
+export async function deleteAllApiKeys(db, userId) {
+  const result = await db.prepare('DELETE FROM api_keys WHERE user_id = ?').bind(userId).run();
+  return result.meta.changes;
 }
 
 // --- Credentials ---
