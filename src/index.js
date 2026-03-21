@@ -1,18 +1,18 @@
-import { Container } from "cloudflare:container";
+import { Container } from "@cloudflare/containers";
 
 export class McpContainer extends Container {
 	defaultPort = 8080;
 	sleepAfter = "5m";
 
-	override onStart() {
+	onStart() {
 		console.log("purelymail-mcp-server container started");
 	}
 
-	override onStop() {
+	onStop() {
 		console.log("purelymail-mcp-server container stopped");
 	}
 
-	override onError(error) {
+	onError(error) {
 		console.error("purelymail-mcp-server error:", error);
 	}
 }
