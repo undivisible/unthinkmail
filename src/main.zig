@@ -16,12 +16,18 @@ const Config = struct {
 };
 
 // Per-instance server state (one container = one user)
+// Mutex protects imap/config — IMAP operations block for network I/O so we
+// serialize them, but the HTTP layer runs one thread per connection so health
+// checks and fast paths (initialize, ping) are never blocked by IMAP.
 const ServerState = struct {
     allocator: mem.Allocator,
+    mutex: std.Thread.Mutex = .{},
     imap: ?*ImapConn = null,
     config: ?Config = null,
 
     fn deinit(self: *ServerState) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         if (self.imap) |c| {
             c.deinit(self.allocator);
             self.allocator.destroy(c);
@@ -30,10 +36,24 @@ const ServerState = struct {
     }
 };
 
+const ConnArg = struct {
+    allocator: mem.Allocator,
+    conn: net.Server.Connection,
+    state: *ServerState,
+};
+
+fn connThread(arg: *ConnArg) void {
+    defer arg.allocator.destroy(arg);
+    handleConn(arg.allocator, arg.conn, arg.state) catch |err| {
+        std.log.err("connection error: {}", .{err});
+    };
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var tsa = std.heap.ThreadSafeAllocator{ .child_allocator = gpa.allocator() };
+    const allocator = tsa.allocator();
 
     var state = ServerState{ .allocator = allocator };
     defer state.deinit();
@@ -46,9 +66,15 @@ pub fn main() !void {
 
     while (true) {
         const conn = try tcp_server.accept();
-        handleConn(allocator, conn, &state) catch |err| {
-            std.log.err("connection error: {}", .{err});
+        const arg = try allocator.create(ConnArg);
+        arg.* = .{ .allocator = allocator, .conn = conn, .state = &state };
+        const t = std.Thread.spawn(.{}, connThread, .{arg}) catch |err| {
+            std.log.err("failed to spawn thread: {}", .{err});
+            allocator.destroy(arg);
+            conn.stream.close();
+            continue;
         };
+        t.detach();
     }
 }
 
@@ -158,29 +184,33 @@ fn handleRpc(allocator: mem.Allocator, body: []const u8, state: *ServerState) ![
     const method = method_v.string;
     const params = obj.get("params");
 
-    // Apply credentials if present (injected by Worker on every request)
+    // Fast paths — no state access needed, no lock required
+    if (mem.startsWith(u8, method, "notifications/")) {
+        return allocator.dupe(u8, "{}");
+    }
+    if (mem.eql(u8, method, "initialize")) {
+        return okResp(allocator, id,
+            \\{"protocolVersion":"2024-11-05","serverInfo":{"name":"unthinkmail","version":"1.0.0"},"capabilities":{"tools":{"listChanged":false}}}
+        );
+    }
+    if (mem.eql(u8, method, "ping")) {
+        return okResp(allocator, id, "{}");
+    }
+    if (mem.eql(u8, method, "tools/list")) {
+        return toolsList(allocator, id);
+    }
+
+    // State-touching paths — serialize with mutex (IMAP ops block on network)
+    state.mutex.lock();
+    defer state.mutex.unlock();
+
     if (obj.get("_credentials")) |creds| {
         if (creds == .object) applyCredentials(allocator, state, creds.object) catch |err| {
             std.log.err("credentials error: {}", .{err});
         };
     }
 
-    // Notifications have no id — acknowledge with empty object, no response body needed
-    // but since we're HTTP we must return something
-    if (mem.startsWith(u8, method, "notifications/")) {
-        return allocator.dupe(u8, "{}");
-    }
-
-    if (mem.eql(u8, method, "initialize")) {
-        // MCP protocol handshake — return full capability declaration
-        return okResp(allocator, id,
-            \\{"protocolVersion":"2024-11-05","serverInfo":{"name":"unthinkmail","version":"1.0.0"},"capabilities":{"tools":{"listChanged":false}}}
-        );
-    } else if (mem.eql(u8, method, "ping")) {
-        return okResp(allocator, id, "{}");
-    } else if (mem.eql(u8, method, "tools/list")) {
-        return toolsList(allocator, id);
-    } else if (mem.eql(u8, method, "tools/call")) {
+    if (mem.eql(u8, method, "tools/call")) {
         if (state.imap == null) {
             return errResp(allocator, id, -32002, "No credentials. Configure IMAP via the hub first.");
         }
