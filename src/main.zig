@@ -381,6 +381,74 @@ fn toolsCall(allocator: mem.Allocator, id: ?json.Value, imap: *ImapConn, config:
     }
 }
 
+// --- Network helpers ---
+
+// Non-blocking TCP connect with poll-based timeout (ms).
+// Falls back to blocking connect on platforms without SOCK_NONBLOCK.
+fn connectWithTimeout(allocator: mem.Allocator, host: []const u8, port: u16, timeout_ms: i32) !net.Stream {
+    const list = try net.getAddressList(allocator, host, port);
+    defer list.deinit();
+    if (list.addrs.len == 0) return error.UnknownHostName;
+
+    var last_err: anyerror = error.ConnectionRefused;
+    for (list.addrs) |addr| {
+        const sock_flags = std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK | std.posix.SOCK.CLOEXEC;
+        const sockfd = std.posix.socket(addr.any.family, sock_flags, std.posix.IPPROTO.TCP) catch |e| {
+            last_err = e;
+            continue;
+        };
+
+        // connect() on a non-blocking socket returns WouldBlock (EINPROGRESS) immediately
+        std.posix.connect(sockfd, &addr.any, addr.getOsSockLen()) catch |e| switch (e) {
+            error.WouldBlock => {}, // expected
+            else => { std.posix.close(sockfd); last_err = e; continue; },
+        };
+
+        // Wait for the socket to become writable (connect complete) or timeout
+        var pollfd = [1]std.posix.pollfd{.{
+            .fd = sockfd,
+            .events = std.posix.POLL.OUT | std.posix.POLL.ERR,
+            .revents = 0,
+        }};
+        const ready = std.posix.poll(&pollfd, timeout_ms) catch |e| {
+            std.posix.close(sockfd);
+            last_err = e;
+            continue;
+        };
+        if (ready == 0) {
+            std.posix.close(sockfd);
+            last_err = error.ConnectionTimedOut;
+            continue;
+        }
+
+        // Check for a socket-level error (connection refused, etc.)
+        var sock_err: i32 = 0;
+        std.posix.getsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.ERROR,
+            std.mem.asBytes(&sock_err)) catch {};
+        if (sock_err != 0) {
+            std.posix.close(sockfd);
+            last_err = error.ConnectionRefused;
+            continue;
+        }
+
+        // Restore blocking mode
+        const flags = std.posix.fcntl(sockfd, std.posix.F.GETFL, 0) catch 0;
+        _ = std.posix.fcntl(sockfd, std.posix.F.SETFL, flags & ~@as(usize, std.posix.SOCK.NONBLOCK)) catch {};
+
+        return net.Stream{ .handle = sockfd };
+    }
+    return last_err;
+}
+
+// Apply SO_RCVTIMEO + SO_SNDTIMEO so every subsequent read/write times out.
+fn setSocketTimeouts(fd: std.posix.fd_t, secs: i64) void {
+    const TimeVal = extern struct { sec: i64, usec: i64 };
+    const tv = TimeVal{ .sec = secs, .usec = 0 };
+    const bytes = std.mem.asBytes(&tv);
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, bytes) catch {};
+    std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, bytes) catch {};
+}
+
 // --- IMAP connection ---
 // Stored on the heap so its address is stable (TLS client holds pointers into it)
 
@@ -426,8 +494,13 @@ const ImapConn = struct {
         if (self.raw_reader) |r| { allocator.destroy(r); self.raw_reader = null; }
         if (self.stream) |s| { s.close(); self.stream = null; }
 
-        // TCP connect
-        self.stream = try net.tcpConnectToHost(allocator, self.config.imap_host, self.config.imap_port);
+        std.log.info("IMAP: connecting to {s}:{d}", .{ self.config.imap_host, self.config.imap_port });
+
+        // TCP connect with 10-second timeout (non-blocking socket + poll)
+        self.stream = try connectWithTimeout(allocator, self.config.imap_host, self.config.imap_port, 10_000);
+
+        // Set 15-second read/write timeouts for TLS handshake and IMAP operations
+        setSocketTimeouts(self.stream.?.handle, 15);
 
         // Allocate reader and writer on heap (stable addresses for TLS to reference)
         const rdr = try allocator.create(net.Stream.Reader);
@@ -437,6 +510,8 @@ const ImapConn = struct {
         const wtr = try allocator.create(net.Stream.Writer);
         wtr.* = self.stream.?.writer(&self.raw_wr_buf);
         self.raw_writer = wtr;
+
+        std.log.info("IMAP: TCP ok, TLS handshake", .{});
 
         // TLS handshake
         var bundle = std.crypto.Certificate.Bundle{};
@@ -452,9 +527,13 @@ const ImapConn = struct {
         });
         self.tls_client = tls;
 
+        std.log.info("IMAP: TLS ok, reading greeting", .{});
+
         // Read IMAP greeting
         var greet_buf: [1024]u8 = undefined;
         _ = try tls.reader.readSliceShort(&greet_buf);
+
+        std.log.info("IMAP: greeting received, logging in", .{});
 
         // LOGIN
         const tag = try self.nextTag(allocator);
