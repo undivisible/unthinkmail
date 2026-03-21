@@ -1,11 +1,26 @@
 {
   "name": "purelymail-mcp-server",
+  "main": "src/index.js",
   "compatibility_date": "2024-03-21",
   "containers": [
     {
-      "name": "purelymail-mcp-server",
-      "image": ".",
-      "command": ["./purelymail-mcp-server", "/data/config.json"]
+      "class_name": "McpContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_CONTAINER",
+        "class_name": "McpContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["McpContainer"]
     }
   ]
 }
