@@ -5,20 +5,118 @@
 import { ImapClient } from './imap.js';
 import { SmtpClient } from './smtp.js';
 
-const TOOLS = [
-  { name: 'listfolders', description: 'List all IMAP mail folders / mailboxes', inputSchema: { type: 'object', properties: {}, required: [] } },
-  { name: 'searchmessages', description: 'Search messages in a folder using IMAP search criteria (e.g. ALL, UNSEEN, FROM "user@example.com", SUBJECT "hello", SINCE 1-Jan-2024)', inputSchema: { type: 'object', properties: { folder: { type: 'string', description: 'Folder to search, e.g. INBOX' }, query: { type: 'string', description: 'IMAP search criteria' } }, required: ['folder'] } },
-  { name: 'getmessage', description: 'Fetch the full content of a message by its UID', inputSchema: { type: 'object', properties: { folder: { type: 'string' }, uid: { type: 'string', description: 'Message UID from searchmessages' } }, required: ['folder', 'uid'] } },
-  { name: 'deletemessage', description: 'Permanently delete a message by UID', inputSchema: { type: 'object', properties: { folder: { type: 'string' }, uid: { type: 'string' } }, required: ['folder', 'uid'] } },
-  { name: 'movemessage', description: 'Move a message to another folder', inputSchema: { type: 'object', properties: { folder: { type: 'string' }, uid: { type: 'string' }, destination: { type: 'string' } }, required: ['folder', 'uid', 'destination'] } },
-  { name: 'sendemail', description: 'Send an email via SMTP', inputSchema: { type: 'object', properties: { to: { type: 'string', description: 'Recipient email address' }, subject: { type: 'string' }, body: { type: 'string', description: 'Plain text email body' }, cc: { type: 'string', description: 'Optional CC address' } }, required: ['to', 'subject', 'body'] } },
-];
+// IMAP date format: DD-Mon-YYYY (e.g. 1-Jan-2024)
+const IMAP_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function toImapDate(s) {
+  const d = new Date(s + 'T00:00:00Z');
+  if (isNaN(d)) throw new Error('Invalid date: ' + s);
+  return `${d.getUTCDate()}-${IMAP_MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
+}
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+// Escape a value for use in an IMAP quoted string
+const imapStr = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, '')}"`;
+
+// Build an IMAP SEARCH criteria string from structured args
+// Falls back to raw `query` if provided (for advanced use)
+function buildSearchQuery(args) {
+  if (args.query) return args.query;
+  const parts = [];
+  if (args.unseen) parts.push('UNSEEN');
+  if (args.from) parts.push(`FROM ${imapStr(args.from)}`);
+  if (args.subject) parts.push(`SUBJECT ${imapStr(args.subject)}`);
+  if (args.since) parts.push(`SINCE ${toImapDate(args.since)}`);
+  if (args.before) parts.push(`BEFORE ${toImapDate(args.before)}`);
+  return parts.length ? parts.join(' ') : 'ALL';
+}
+
+const TOOLS = [
+  {
+    name: 'listfolders',
+    description: 'List all IMAP mail folders / mailboxes',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'searchmessages',
+    description: 'Search for messages in a mail folder. Returns a list of UIDs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder:  { type: 'string', description: 'Folder to search (default: INBOX)' },
+        unseen:  { type: 'boolean', description: 'Only return unread messages' },
+        from:    { type: 'string', description: 'Filter by sender address or name' },
+        subject: { type: 'string', description: 'Filter by subject text' },
+        since:   { type: 'string', description: 'Messages on or after this date (YYYY-MM-DD)' },
+        before:  { type: 'string', description: 'Messages before this date (YYYY-MM-DD)' },
+        query:   { type: 'string', description: 'Raw IMAP SEARCH criteria (overrides other fields when provided)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'getmessage',
+    description: 'Fetch and parse a message by UID. Returns sender, subject, decoded body, and attachment list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
+        uid:    { type: 'string', description: 'Message UID from searchmessages' },
+      },
+      required: ['uid'],
+    },
+  },
+  {
+    name: 'deletemessage',
+    description: 'Permanently delete a message by UID',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: { type: 'string' },
+        uid:    { type: 'string' },
+      },
+      required: ['uid'],
+    },
+  },
+  {
+    name: 'movemessage',
+    description: 'Move a message to another folder',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder:      { type: 'string' },
+        uid:         { type: 'string' },
+        destination: { type: 'string', description: 'Destination folder name' },
+      },
+      required: ['uid', 'destination'],
+    },
+  },
+  {
+    name: 'sendemail',
+    description: 'Compose and send a new email via SMTP',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to:      { type: 'string', description: 'Recipient email address' },
+        subject: { type: 'string' },
+        body:    { type: 'string', description: 'Plain text email body' },
+        cc:      { type: 'string', description: 'Optional CC address' },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+  {
+    name: 'replyemail',
+    description: 'Reply to an existing message, preserving threading headers (In-Reply-To / References)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        folder: { type: 'string', description: 'Folder containing the original message (default: INBOX)' },
+        uid:    { type: 'string', description: 'UID of the message to reply to' },
+        body:   { type: 'string', description: 'Plain text reply body' },
+      },
+      required: ['uid', 'body'],
+    },
+  },
+];
 
 export class ImapSession {
   #imap = null;
@@ -31,42 +129,32 @@ export class ImapSession {
 
   async fetch(request) {
     return this.state.blockConcurrencyWhile(async () => {
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: CORS });
-      }
-
       if (request.method === 'GET') {
-        return Response.json(
-          { name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' },
-          { headers: CORS }
-        );
+        return Response.json({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' });
       }
 
       const body = await request.json().catch(() => null);
-      if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400, headers: CORS });
+      if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
 
-      // Update credentials if provided
+      // Update credentials if provided (injected by mcp.js Worker, not from clients)
       if (body._credentials) {
         const creds = body._credentials;
         const changed = !this.#credentials ||
           this.#credentials.imap_host !== creds.imap_host ||
           this.#credentials.imap_user !== creds.imap_user ||
           this.#credentials.imap_port !== creds.imap_port;
-        if (changed) {
-          await this.#disconnect();
-        }
+        if (changed) await this.#disconnect();
         this.#credentials = creds;
       }
 
       const response = await this.#handleRpc(body);
-      return Response.json(response, { headers: CORS });
+      return Response.json(response);
     });
   }
 
   async #ensureConnected() {
     if (this.#imap?.isConnected()) return;
     if (!this.#credentials) throw new Error('No credentials');
-
     console.log('[imap] connecting to', this.#credentials.imap_host, this.#credentials.imap_port);
     this.#imap = new ImapClient();
     await this.#imap.connect(
@@ -85,11 +173,22 @@ export class ImapSession {
     }
   }
 
+  #smtpParams() {
+    const c = this.#credentials;
+    return {
+      host: c.smtp_host,
+      port: c.smtp_port ?? 465,
+      user: c.smtp_user ?? c.imap_user,
+      pass: c.smtp_pass ?? c.imap_pass,
+      from: c.smtp_user ?? c.imap_user,
+    };
+  }
+
   async #handleRpc({ method, params, id }) {
-    const ok = (result) => ({ jsonrpc: '2.0', id, result });
-    const err = (code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
-    const toolOk = (data) => ok({ content: [{ type: 'text', text: JSON.stringify(data) }], isError: false });
-    const toolErr = (msg) => ok({ content: [{ type: 'text', text: msg }], isError: true });
+    const ok      = (result)         => ({ jsonrpc: '2.0', id, result });
+    const err     = (code, message)  => ({ jsonrpc: '2.0', id, error: { code, message } });
+    const toolOk  = (data)           => ok({ content: [{ type: 'text', text: JSON.stringify(data) }], isError: false });
+    const toolErr = (msg)            => ok({ content: [{ type: 'text', text: msg }], isError: true });
 
     if (!method) return err(-32600, 'Missing method');
     if (method.startsWith('notifications/') || method === 'ping') return ok({});
@@ -103,36 +202,61 @@ export class ImapSession {
     }
 
     if (method === 'tools/list') return ok({ tools: TOOLS });
-
     if (method !== 'tools/call') return err(-32601, 'Method not found');
 
     const name = params?.name;
     const args = params?.arguments ?? {};
 
-    // sendemail doesn't need IMAP
+    // --- sendemail (no IMAP needed) ---
     if (name === 'sendemail') {
-      if (!args.to) return err(-32602, 'Missing to');
+      if (!args.to)      return err(-32602, 'Missing to');
       if (!args.subject) return err(-32602, 'Missing subject');
-      if (!args.body) return err(-32602, 'Missing body');
+      if (!args.body)    return err(-32602, 'Missing body');
       try {
-        const smtp = new SmtpClient();
-        const result = await smtp.send({
-          host: this.#credentials.smtp_host,
-          port: this.#credentials.smtp_port ?? 465,
-          user: this.#credentials.smtp_user ?? this.#credentials.imap_user,
-          pass: this.#credentials.smtp_pass ?? this.#credentials.imap_pass,
-          from: this.#credentials.smtp_user ?? this.#credentials.imap_user,
-          to: args.to,
-          subject: args.subject,
-          body: args.body,
-          cc: args.cc,
-        });
+        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, cc: args.cc });
         return toolOk(result);
       } catch (e) {
         return toolErr('SMTP error: ' + e.message);
       }
     }
 
+    // --- replyemail (needs IMAP for headers, then SMTP) ---
+    if (name === 'replyemail') {
+      if (!args.uid)  return err(-32602, 'Missing uid');
+      if (!args.body) return err(-32602, 'Missing body');
+      try {
+        await this.#ensureConnected();
+      } catch (e) {
+        return toolErr('IMAP connection failed: ' + e.message);
+      }
+      try {
+        const folder = args.folder ?? 'INBOX';
+        const h = await this.#imap.fetchHeaders(folder, args.uid);
+
+        const replyTo = h.replyTo || h.from;
+        const replySubject = /^re:/i.test(h.subject) ? h.subject : 'Re: ' + h.subject;
+
+        // Build References: chain (prior references + original message-id)
+        const refs = [h.references, h.messageId].filter(Boolean).join(' ').trim();
+
+        const result = await new SmtpClient().send({
+          ...this.#smtpParams(),
+          to: replyTo,
+          subject: replySubject,
+          body: args.body,
+          extraHeaders: {
+            'In-Reply-To': h.messageId,
+            'References':  refs,
+          },
+        });
+        return toolOk(result);
+      } catch (e) {
+        await this.#disconnect();
+        return toolErr(e.message);
+      }
+    }
+
+    // --- all other tools require IMAP ---
     try {
       await this.#ensureConnected();
     } catch (e) {
@@ -143,24 +267,31 @@ export class ImapSession {
       let result;
       if (name === 'listfolders') {
         result = await this.#imap.listFolders();
+
       } else if (name === 'searchmessages') {
-        result = await this.#imap.searchMessages(args.folder ?? 'INBOX', args.query ?? 'ALL');
+        let query;
+        try { query = buildSearchQuery(args); } catch (e) { return err(-32602, e.message); }
+        result = await this.#imap.searchMessages(args.folder ?? 'INBOX', query);
+
       } else if (name === 'getmessage') {
         if (!args.uid) return err(-32602, 'Missing uid');
         result = await this.#imap.getMessage(args.folder ?? 'INBOX', args.uid);
+
       } else if (name === 'deletemessage') {
         if (!args.uid) return err(-32602, 'Missing uid');
         result = await this.#imap.deleteMessage(args.folder ?? 'INBOX', args.uid);
+
       } else if (name === 'movemessage') {
-        if (!args.uid) return err(-32602, 'Missing uid');
+        if (!args.uid)         return err(-32602, 'Missing uid');
         if (!args.destination) return err(-32602, 'Missing destination');
         result = await this.#imap.moveMessage(args.folder ?? 'INBOX', args.uid, args.destination);
+
       } else {
         return err(-32601, 'Unknown tool: ' + name);
       }
       return toolOk(result);
     } catch (e) {
-      // Reset connection on error so next request reconnects
+      // Reset connection on error so next request reconnects cleanly
       await this.#disconnect();
       return toolErr(e.message);
     }

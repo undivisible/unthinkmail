@@ -1,37 +1,57 @@
 // SMTP client using Cloudflare TCP Sockets
-// Connects to SMTPS (port 465, TLS from start) and sends email
+// Supports SMTPS (port 465, TLS-from-start) and STARTTLS (port 587 / any non-465)
 
 import { connect } from 'cloudflare:sockets';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, cc }) {
-    const socket = connect({ hostname: host, port }, { secureTransport: 'on' });
-    const reader = socket.readable.getReader();
-    const writer = socket.writable.getWriter();
-    let buf = new Uint8Array(0);
+// Extract bare email address from "Display Name <addr@example.com>" or plain "addr@example.com"
+const envelopeAddr = (s) => {
+  const m = String(s).match(/<([^>]+)>/);
+  return (m ? m[1] : String(s).trim()).replace(/[\r\n]/g, '').trim();
+};
 
-    const write = (s) => writer.write(enc.encode(s));
+// Sanitize a header value — strip CRLF to prevent header injection
+const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
+
+export class SmtpClient {
+  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {} }) {
+    from    = sanitizeHeader(from);
+    to      = sanitizeHeader(to);
+    subject = sanitizeHeader(subject);
+    if (cc) cc = Array.isArray(cc) ? cc.map(sanitizeHeader) : sanitizeHeader(cc);
+
+    const isSmtps = port === 465;
+    const socket = connect({ hostname: host, port }, { secureTransport: isSmtps ? 'on' : 'starttls' });
+    await socket.opened; // surfaces TCP/TLS errors with a real message
+
+    // Use a state object so write/readLine closures see upgrades after STARTTLS
+    const state = {
+      reader: socket.readable.getReader(),
+      writer: socket.writable.getWriter(),
+      buf: new Uint8Array(0),
+    };
+
+    const write = (s) => state.writer.write(enc.encode(s));
 
     const readLine = async () => {
       while (true) {
-        const nl = buf.indexOf(10);
+        const nl = state.buf.indexOf(10);
         if (nl >= 0) {
-          const line = dec.decode(buf.slice(0, nl + 1)).trimEnd();
-          buf = buf.slice(nl + 1);
+          const line = dec.decode(state.buf.slice(0, nl + 1)).trimEnd();
+          state.buf = state.buf.slice(nl + 1);
           return line;
         }
-        const { done, value } = await reader.read();
-        if (done) return dec.decode(buf).trim();
-        const next = new Uint8Array(buf.length + value.length);
-        next.set(buf); next.set(value, buf.length);
-        buf = next;
+        const { done, value } = await state.reader.read();
+        if (done) return dec.decode(state.buf).trim();
+        const next = new Uint8Array(state.buf.length + value.length);
+        next.set(state.buf); next.set(value, state.buf.length);
+        state.buf = next;
       }
     };
 
-    // Read multi-line SMTP response (250-... continues, 250 ... ends)
+    // Read a full multi-line SMTP response (handles 250-... continuations)
     const readResp = async () => {
       let last = '';
       while (true) {
@@ -49,6 +69,23 @@ export class SmtpClient {
       await write('EHLO unthinkmail\r\n');
       await readResp();
 
+      // STARTTLS upgrade for non-SMTPS ports
+      if (!isSmtps) {
+        await write('STARTTLS\r\n');
+        const r = await readResp();
+        if (!r.startsWith('220')) throw new Error('STARTTLS rejected: ' + r);
+        // Release locks before upgrading
+        state.reader.releaseLock();
+        state.writer.releaseLock();
+        const tls = socket.startTls();
+        state.reader = tls.readable.getReader();
+        state.writer = tls.writable.getWriter();
+        state.buf = new Uint8Array(0);
+        // Re-EHLO over TLS
+        await write('EHLO unthinkmail\r\n');
+        await readResp();
+      }
+
       await write('AUTH LOGIN\r\n');
       await readResp(); // 334 Username:
       await write(btoa(user) + '\r\n');
@@ -57,13 +94,13 @@ export class SmtpClient {
       const authResp = await readResp();
       if (!authResp.startsWith('235')) throw new Error('Auth failed: ' + authResp);
 
-      await write(`MAIL FROM:<${from}>\r\n`);
+      await write(`MAIL FROM:<${envelopeAddr(from)}>\r\n`);
       const fromResp = await readResp();
       if (!fromResp.startsWith('250')) throw new Error('MAIL FROM failed: ' + fromResp);
 
       const recipients = [to, ...(Array.isArray(cc) ? cc : cc ? [cc] : [])].filter(Boolean);
       for (const r of recipients) {
-        await write(`RCPT TO:<${r}>\r\n`);
+        await write(`RCPT TO:<${envelopeAddr(r)}>\r\n`);
         const rcptResp = await readResp();
         if (!rcptResp.startsWith('250')) throw new Error(`RCPT TO <${r}> failed: ` + rcptResp);
       }
@@ -73,6 +110,13 @@ export class SmtpClient {
       if (!dataResp.startsWith('354')) throw new Error('DATA failed: ' + dataResp);
 
       const ccHeader = recipients.length > 1 ? `Cc: ${recipients.slice(1).join(', ')}\r\n` : '';
+
+      // Build extra headers (e.g. In-Reply-To, References)
+      const extraLines = Object.entries(extraHeaders)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${k}: ${sanitizeHeader(v)}\r\n`)
+        .join('');
+
       // Dot-stuff lines starting with "." per RFC 5321
       const stuffed = body
         .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
@@ -80,8 +124,8 @@ export class SmtpClient {
 
       await write(
         `From: ${from}\r\nTo: ${to}\r\n${ccHeader}` +
-        `Subject: ${subject}\r\nMIME-Version: 1.0\r\n` +
-        `Content-Type: text/plain; charset=utf-8\r\n\r\n` +
+        `Subject: ${subject}\r\n${extraLines}` +
+        `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
         `${stuffed}\r\n.\r\n`
       );
 
@@ -91,8 +135,8 @@ export class SmtpClient {
       await write('QUIT\r\n');
       return { sent: true, to, subject };
     } finally {
-      try { await writer.close(); } catch {}
-      try { reader.cancel(); } catch {}
+      try { await state.writer.close(); } catch {}
+      try { state.reader.cancel(); } catch {}
     }
   }
 }
