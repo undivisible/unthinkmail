@@ -24,8 +24,6 @@ export class SmtpClient {
 
     const isSmtps = port === 465;
     const socket = connect({ hostname: host, port }, { secureTransport: isSmtps ? 'on' : 'starttls' });
-    await socket.opened; // surfaces TCP/TLS errors with a real message
-
     // Use a state object so write/readLine closures see upgrades after STARTTLS
     const state = {
       reader: socket.readable.getReader(),

@@ -30,8 +30,6 @@ export class ImapClient {
 
   async connect(host, port, user, pass) {
     this.#socket = connect({ hostname: host, port }, { secureTransport: 'on' });
-    // Await connection establishment — surfaces TLS/TCP errors with a real message
-    await this.#socket.opened;
     this.#reader = this.#socket.readable.getReader();
     this.#writer = this.#socket.writable.getWriter();
 
