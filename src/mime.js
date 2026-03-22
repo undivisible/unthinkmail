@@ -10,9 +10,9 @@ function decodeWords(s) {
       if (enc.toUpperCase() === 'B') {
         bytes = Uint8Array.from(atob(text), c => c.charCodeAt(0));
       } else {
-        // Quoted-printable with _ → space
+        // Quoted-printable with _ → space; each decoded char is a raw byte value
         const qp = text.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-        bytes = new TextEncoder().encode(qp);
+        bytes = Uint8Array.from(qp, c => c.charCodeAt(0));
       }
       return new TextDecoder(charset).decode(bytes);
     } catch { return text; }
@@ -81,10 +81,22 @@ function splitParts(body, boundary) {
     // Check for closing delimiter --boundary--
     const tail = body.slice(after, after + 2);
     if (tail === '--') {
-      if (start >= 0) parts.push(body.slice(start, idx));
+      if (start >= 0) {
+        let part = body.slice(start, idx);
+        if (part.endsWith('\r\n')) part = part.slice(0, -2);
+        else if (part.endsWith('\n')) part = part.slice(0, -1);
+        parts.push(part);
+      }
       break;
     }
-    if (start >= 0) parts.push(body.slice(start, idx));
+    if (start >= 0) {
+      // Strip the CRLF immediately before the boundary — it belongs to the
+      // delimiter, not the part body (RFC 2046 §5.1.1)
+      let part = body.slice(start, idx);
+      if (part.endsWith('\r\n')) part = part.slice(0, -2);
+      else if (part.endsWith('\n')) part = part.slice(0, -1);
+      parts.push(part);
+    }
     // Advance past the delimiter line
     const nl = body.indexOf('\n', after);
     start = nl >= 0 ? nl + 1 : after;
