@@ -38,6 +38,7 @@ function oauthError(error, description) {
 // GET /.well-known/oauth-authorization-server
 export async function handleOAuthMeta(request) {
   const o = new URL(request.url).origin;
+  console.log('[oauth] meta requested from', request.headers.get('User-Agent')?.slice(0, 60));
   return json({
     issuer: o,
     authorization_endpoint: `${o}/oauth/authorize`,
@@ -57,6 +58,7 @@ export async function handleOAuthRegister(request) {
   const body = await request.json().catch(() => ({}));
   const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
   const clientId = b64url(enc.encode(JSON.stringify(uris.sort())));
+  console.log('[oauth] register redirect_uris=%j client_id_prefix=%s', uris, clientId.slice(0, 12));
   return json({
     client_id: clientId,
     client_id_issued_at: Math.floor(Date.now() / 1000),
@@ -75,6 +77,8 @@ export async function handleOAuthAuthorize(request, env) {
 
   if (request.method === 'GET') {
     const p = Object.fromEntries(url.searchParams);
+    console.log('[oauth] authorize GET client_id_prefix=%s redirect_uri=%s has_challenge=%s',
+      p.client_id?.slice(0, 12), p.redirect_uri, !!p.code_challenge);
     return new Response(oauthForm(p, null), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
   }
 
@@ -129,6 +133,7 @@ export async function handleOAuthAuthorize(request, env) {
   dest.searchParams.set('code', code);
   if (state) dest.searchParams.set('state', state);
 
+  console.log('[oauth] authorize POST success redirecting to=%s code_len=%d', dest.hostname, code.length);
   return Response.redirect(dest.toString(), 302);
 }
 
@@ -136,14 +141,17 @@ export async function handleOAuthAuthorize(request, env) {
 export async function handleOAuthToken(request, env) {
   let body;
   const ct = request.headers.get('Content-Type') || '';
+  console.log('[oauth] token request ct=%s', ct);
   if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
     const form = await request.formData().catch(() => null);
-    if (!form) return oauthError('invalid_request', 'Invalid form data');
+    if (!form) { console.log('[oauth] token: formData parse failed'); return oauthError('invalid_request', 'Invalid form data'); }
     body = Object.fromEntries(form);
   } else {
     body = await request.json().catch(() => null);
-    if (!body) return oauthError('invalid_request', 'Invalid request body');
+    if (!body) { console.log('[oauth] token: json parse failed'); return oauthError('invalid_request', 'Invalid request body'); }
   }
+
+  console.log('[oauth] token grant_type=%s has_code=%s has_verifier=%s', body.grant_type, !!body.code, !!body.code_verifier);
 
   if (body.grant_type !== 'authorization_code') return oauthError('unsupported_grant_type');
 
@@ -152,30 +160,38 @@ export async function handleOAuthToken(request, env) {
   if (!code_verifier) return oauthError('invalid_request', 'Missing code_verifier');
 
   const dotIdx = code.lastIndexOf('.');
-  if (dotIdx < 1) return oauthError('invalid_grant');
+  if (dotIdx < 1) { console.log('[oauth] token: bad code format'); return oauthError('invalid_grant'); }
   const payload = code.slice(0, dotIdx);
   const sig = code.slice(dotIdx + 1);
 
   const valid = await hmacVerify(payload, sig, env.OAUTH_SECRET || 'insecure-default');
-  if (!valid) return oauthError('invalid_grant');
+  if (!valid) { console.log('[oauth] token: HMAC invalid, secret present=%s', !!env.OAUTH_SECRET); return oauthError('invalid_grant'); }
 
   let data;
   try {
     data = JSON.parse(fromB64url(payload));
-  } catch {
+  } catch (e) {
+    console.log('[oauth] token: payload decode failed', e?.message);
     return oauthError('invalid_grant');
   }
 
-  if (Date.now() > data.exp) return oauthError('invalid_grant', 'Code expired');
+  if (Date.now() > data.exp) { console.log('[oauth] token: code expired'); return oauthError('invalid_grant', 'Code expired'); }
 
-  if (redirect_uri && redirect_uri !== data.ru) return oauthError('invalid_grant', 'redirect_uri mismatch');
+  if (redirect_uri && redirect_uri !== data.ru) {
+    console.log('[oauth] token: redirect_uri mismatch got=%s want=%s', redirect_uri, data.ru);
+    return oauthError('invalid_grant', 'redirect_uri mismatch');
+  }
 
   if (data.cc) {
     const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode(code_verifier));
     const challenge = b64url(new Uint8Array(hashBuf));
-    if (challenge !== data.cc) return oauthError('invalid_grant', 'PKCE verification failed');
+    if (challenge !== data.cc) {
+      console.log('[oauth] token: PKCE failed computed=%s stored=%s', challenge, data.cc);
+      return oauthError('invalid_grant', 'PKCE verification failed');
+    }
   }
 
+  console.log('[oauth] token: success issuing access_token');
   return json({
     access_token: data.k,
     token_type: 'bearer',
@@ -261,7 +277,7 @@ function oauthForm(params, error) {
   <div class="max-w-lg mx-auto px-6 py-12">
 
     <div class="mb-8">
-      <h1 class="text-white font-light text-2xl mb-1">unthinkmail</h1>
+      <a href="/" class="hover:opacity-70 transition-opacity"><h1 class="text-white font-light text-2xl mb-1">unthinkmail</h1></a>
       <p class="text-sub text-xs">connect your email to your ai</p>
       <p class="text-dim text-xs mt-2 leading-relaxed max-w-sm">enter your imap credentials to authorize access. nothing is stored — your credentials are encoded into the access token.</p>
     </div>
