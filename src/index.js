@@ -41,7 +41,9 @@ export default {
       if (url.pathname === '/health') return json({ status: 'ok' });
       if (url.pathname === '/api/key') return handleKey(request, env);
       if (url.pathname === '/mcp') return handleMcp(request, env);
-      if (url.pathname === '/.well-known/oauth-authorization-server') return handleOAuthMeta(request, env);
+      if (url.pathname === '/.well-known/oauth-authorization-server' ||
+          url.pathname === '/.well-known/oauth-authorization-server/mcp' ||
+          url.pathname === '/.well-known/openid-configuration') return handleOAuthMeta(request, env);
       if (url.pathname === '/oauth/register') return handleOAuthRegister(request, env);
       if (url.pathname === '/oauth/authorize') return handleOAuthAuthorize(request, env);
       if (url.pathname === '/oauth/token') return handleOAuthToken(request, env);

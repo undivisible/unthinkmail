@@ -9,24 +9,35 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+const WWW_AUTH = 'Bearer realm="unthinkmail", error="unauthorized"';
+
 export async function handleMcp(request, env) {
+  if (request.method !== 'GET' && request.method !== 'POST') return jsonError('Method not allowed', 405);
+
+  const auth = request.headers.get('Authorization') || '';
+  if (!auth.startsWith('Bearer ')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': WWW_AUTH, ...CORS },
+    });
+  }
+
+  let credentials;
+  try {
+    credentials = await decodeKey(auth.slice(7));
+  } catch {
+    return new Response(JSON.stringify({ error: 'Invalid API key' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': `Bearer realm="unthinkmail", error="invalid_token"`, ...CORS },
+    });
+  }
+
   // MCP clients probe with GET to validate the server URL
   if (request.method === 'GET') {
     return new Response(
       JSON.stringify({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' }),
       { status: 200, headers: { 'Content-Type': 'application/json', ...CORS } }
     );
-  }
-  if (request.method !== 'POST') return jsonError('Method not allowed', 405);
-
-  const auth = request.headers.get('Authorization') || '';
-  if (!auth.startsWith('Bearer um_')) return jsonError('Missing or invalid API key', 401);
-
-  let credentials;
-  try {
-    credentials = await decodeKey(auth.slice(7));
-  } catch {
-    return jsonError('Invalid API key', 401);
   }
 
   const body = await request.json().catch(() => null);

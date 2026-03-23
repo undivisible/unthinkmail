@@ -10,7 +10,8 @@ const enc = new TextEncoder();
 
 function b64url(buf) {
   if (typeof buf === 'string') buf = enc.encode(buf);
-  return btoa(String.fromCharCode(...new Uint8Array(buf instanceof ArrayBuffer ? buf : buf.buffer ?? buf)))
+  if (buf instanceof ArrayBuffer) buf = new Uint8Array(buf);
+  return btoa(String.fromCharCode(...buf))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
