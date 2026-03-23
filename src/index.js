@@ -1,6 +1,7 @@
 import { ImapSession } from './session.js';
 import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
+import { handleOAuthMeta, handleOAuthRegister, handleOAuthAuthorize, handleOAuthToken } from './routes/oauth.js';
 import { HUB } from './pages.js';
 
 export { ImapSession };
@@ -40,6 +41,10 @@ export default {
       if (url.pathname === '/health') return json({ status: 'ok' });
       if (url.pathname === '/api/key') return handleKey(request, env);
       if (url.pathname === '/mcp') return handleMcp(request, env);
+      if (url.pathname === '/.well-known/oauth-authorization-server') return handleOAuthMeta(request, env);
+      if (url.pathname === '/oauth/register') return handleOAuthRegister(request, env);
+      if (url.pathname === '/oauth/authorize') return handleOAuthAuthorize(request, env);
+      if (url.pathname === '/oauth/token') return handleOAuthToken(request, env);
 
       return jsonError('Not found', 404);
     } catch (e) {

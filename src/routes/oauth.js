@@ -1,0 +1,337 @@
+// OAuth 2.1 endpoints for MCP client compatibility (e.g., Claude.ai)
+// Strategy: access_token = um_ key, so /mcp requires zero changes.
+// Auth codes are HMAC-signed, self-contained — no KV or DO storage needed.
+// Requires OAUTH_SECRET env var (set via: wrangler secret put OAUTH_SECRET).
+
+import { encodeKey } from '../lib/crypto.js';
+import { json } from '../index.js';
+
+const enc = new TextEncoder();
+
+function b64url(buf) {
+  if (typeof buf === 'string') buf = enc.encode(buf);
+  return btoa(String.fromCharCode(...new Uint8Array(buf instanceof ArrayBuffer ? buf : buf.buffer ?? buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromB64url(s) {
+  let b = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (b.length % 4) b += '=';
+  return atob(b);
+}
+
+async function hmacSign(payload, secret) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
+  return b64url(new Uint8Array(sig));
+}
+
+async function hmacVerify(payload, sig, secret) {
+  return (await hmacSign(payload, secret)) === sig;
+}
+
+function oauthError(error, description) {
+  return json({ error, ...(description ? { error_description: description } : {}) }, 400);
+}
+
+// GET /.well-known/oauth-authorization-server
+export async function handleOAuthMeta(request) {
+  const o = new URL(request.url).origin;
+  return json({
+    issuer: o,
+    authorization_endpoint: `${o}/oauth/authorize`,
+    token_endpoint: `${o}/oauth/token`,
+    registration_endpoint: `${o}/oauth/register`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
+    scopes_supported: ['email'],
+  });
+}
+
+// POST /oauth/register — RFC 7591 dynamic client registration
+// client_id is deterministic (base64url of sorted redirect_uris) — no storage needed.
+export async function handleOAuthRegister(request) {
+  const body = await request.json().catch(() => ({}));
+  const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+  const clientId = b64url(enc.encode(JSON.stringify(uris.sort())));
+  return json({
+    client_id: clientId,
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    redirect_uris: uris,
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+    scope: 'email',
+  }, 201);
+}
+
+// GET /oauth/authorize — show credentials form
+// POST /oauth/authorize — validate creds, create signed code, redirect
+export async function handleOAuthAuthorize(request, env) {
+  const url = new URL(request.url);
+
+  if (request.method === 'GET') {
+    const p = Object.fromEntries(url.searchParams);
+    return new Response(oauthForm(p, null), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+  }
+
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  const form = await request.formData().catch(() => null);
+  if (!form) return new Response('Invalid form data', { status: 400 });
+
+  const redirectUri = form.get('redirect_uri');
+  const state = form.get('state');
+  const codeChallenge = form.get('code_challenge');
+  const clientId = form.get('client_id');
+
+  if (!redirectUri) return new Response('Missing redirect_uri', { status: 400 });
+
+  // Validate redirect_uri against registered client
+  if (clientId) {
+    try {
+      const registered = JSON.parse(fromB64url(clientId));
+      if (Array.isArray(registered) && !registered.includes(redirectUri)) {
+        return new Response('redirect_uri not registered for this client', { status: 400 });
+      }
+    } catch {
+      // Lenient: if client_id can't be decoded, proceed anyway
+    }
+  }
+
+  const imapHost = form.get('imap_host')?.trim();
+  const imapPort = parseInt(form.get('imap_port')) || 993;
+  const imapUser = form.get('imap_user')?.trim();
+  const imapPass = form.get('imap_pass');
+  const smtpHost = form.get('smtp_host')?.trim() || imapHost;
+  const smtpPort = parseInt(form.get('smtp_port')) || 465;
+
+  const oauthParams = { redirect_uri: redirectUri, state, code_challenge: codeChallenge, client_id: clientId };
+
+  if (!imapHost || !imapUser || !imapPass) {
+    return new Response(oauthForm(oauthParams, 'imap host, username, and password are required'), {
+      headers: { 'Content-Type': 'text/html;charset=utf-8' },
+    });
+  }
+
+  const creds = { imap_host: imapHost, imap_port: imapPort, imap_user: imapUser, imap_pass: imapPass, smtp_host: smtpHost, smtp_port: smtpPort };
+  const umKey = await encodeKey(creds);
+
+  const payloadJson = JSON.stringify({ k: umKey, cc: codeChallenge, ru: redirectUri, exp: Date.now() + 10 * 60 * 1000 });
+  const payload = b64url(enc.encode(payloadJson));
+  const sig = await hmacSign(payload, env.OAUTH_SECRET || 'insecure-default');
+  const code = `${payload}.${sig}`;
+
+  const dest = new URL(redirectUri);
+  dest.searchParams.set('code', code);
+  if (state) dest.searchParams.set('state', state);
+
+  return Response.redirect(dest.toString(), 302);
+}
+
+// POST /oauth/token — exchange PKCE-verified auth code for access_token (= um_ key)
+export async function handleOAuthToken(request, env) {
+  let body;
+  const ct = request.headers.get('Content-Type') || '';
+  if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
+    const form = await request.formData().catch(() => null);
+    if (!form) return oauthError('invalid_request', 'Invalid form data');
+    body = Object.fromEntries(form);
+  } else {
+    body = await request.json().catch(() => null);
+    if (!body) return oauthError('invalid_request', 'Invalid request body');
+  }
+
+  if (body.grant_type !== 'authorization_code') return oauthError('unsupported_grant_type');
+
+  const { code, code_verifier, redirect_uri } = body;
+  if (!code) return oauthError('invalid_request', 'Missing code');
+  if (!code_verifier) return oauthError('invalid_request', 'Missing code_verifier');
+
+  const dotIdx = code.lastIndexOf('.');
+  if (dotIdx < 1) return oauthError('invalid_grant');
+  const payload = code.slice(0, dotIdx);
+  const sig = code.slice(dotIdx + 1);
+
+  const valid = await hmacVerify(payload, sig, env.OAUTH_SECRET || 'insecure-default');
+  if (!valid) return oauthError('invalid_grant');
+
+  let data;
+  try {
+    data = JSON.parse(fromB64url(payload));
+  } catch {
+    return oauthError('invalid_grant');
+  }
+
+  if (Date.now() > data.exp) return oauthError('invalid_grant', 'Code expired');
+
+  if (redirect_uri && redirect_uri !== data.ru) return oauthError('invalid_grant', 'redirect_uri mismatch');
+
+  if (data.cc) {
+    const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode(code_verifier));
+    const challenge = b64url(new Uint8Array(hashBuf));
+    if (challenge !== data.cc) return oauthError('invalid_grant', 'PKCE verification failed');
+  }
+
+  return json({
+    access_token: data.k,
+    token_type: 'bearer',
+    scope: 'email',
+  });
+}
+
+const TAILWIND_CONFIG = `
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        surface: '#0e0e0e',
+        border:  '#1e1e1e',
+        muted:   '#2a2a2a',
+        dim:     '#3d3d3d',
+        sub:     '#686868',
+        body:    '#e2e2e2',
+      },
+      fontFamily: { mono: ["'SF Mono'", 'Monaco', 'monospace'] },
+    }
+  }
+}`;
+
+const OAUTH_SCRIPT = `
+function oauthForm() {
+  return {
+    f: { imapHost: '', imapPort: '993', smtpHost: '', smtpPort: '465', user: '', pass: '' },
+    loading: false,
+
+    imapHostChanged() {
+      if (!this.f.smtpHost || this.f.smtpHost === this.lastImapHost) {
+        this.f.smtpHost = this.f.imapHost.replace('imap.', 'smtp.');
+      }
+      this.lastImapHost = this.f.imapHost;
+    },
+
+    preset(p) {
+      const presets = {
+        purelymail: { ih: 'imap.purelymail.com', ip: '993', sh: 'smtp.purelymail.com', sp: '465' },
+        gmail:      { ih: 'imap.gmail.com',       ip: '993', sh: 'smtp.gmail.com',      sp: '465' },
+        outlook:    { ih: 'outlook.office365.com', ip: '993', sh: 'smtp.office365.com', sp: '587' },
+        fastmail:   { ih: 'imap.fastmail.com',     ip: '993', sh: 'smtp.fastmail.com',  sp: '465' },
+      };
+      const r = presets[p]; if (!r) return;
+      this.f.imapHost = r.ih; this.f.imapPort = r.ip;
+      this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
+    },
+
+    submit() { this.loading = true; this.$el.closest('form').submit(); },
+  };
+}`;
+
+function oauthForm(params, error) {
+  const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const { redirect_uri = '', state = '', code_challenge = '', code_challenge_method = 'S256', client_id = '' } = params;
+
+  return `<!DOCTYPE html>
+<html lang="en" class="dark bg-black">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>unthinkmail — connect</title>
+<script src="https://cdn.tailwindcss.com"><\/script>
+<script>${TAILWIND_CONFIG}<\/script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"><\/script>
+<style>
+  [x-cloak]{display:none!important}
+  input:-webkit-autofill{-webkit-text-fill-color:#e2e2e2!important;-webkit-box-shadow:0 0 0 1000px #0e0e0e inset!important}
+</style>
+</head>
+<body class="bg-black text-body min-h-screen" x-data="oauthForm()" x-cloak>
+<script>${OAUTH_SCRIPT}<\/script>
+
+<form method="POST" action="/oauth/authorize">
+  <input type="hidden" name="redirect_uri" value="${h(redirect_uri)}">
+  <input type="hidden" name="state" value="${h(state)}">
+  <input type="hidden" name="code_challenge" value="${h(code_challenge)}">
+  <input type="hidden" name="code_challenge_method" value="${h(code_challenge_method)}">
+  <input type="hidden" name="client_id" value="${h(client_id)}">
+
+  <div class="max-w-lg mx-auto px-6 py-12">
+
+    <div class="mb-8">
+      <h1 class="text-white font-light text-2xl mb-1">unthinkmail</h1>
+      <p class="text-sub text-xs">connect your email to your ai</p>
+      <p class="text-dim text-xs mt-2 leading-relaxed max-w-sm">enter your imap credentials to authorize access. nothing is stored — your credentials are encoded into the access token.</p>
+    </div>
+
+    <div class="flex gap-2 mb-5 flex-wrap">
+      <span class="text-xs text-dim self-center">quick fill:</span>
+      <template x-for="p in ['purelymail','gmail','outlook','fastmail']">
+        <button type="button" @click="preset(p)"
+          class="text-xs border border-border text-dim px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
+          x-text="p"></button>
+      </template>
+    </div>
+
+    <div class="bg-surface border border-border rounded-lg p-5 space-y-3">
+
+      <div class="grid grid-cols-[1fr_6rem] gap-2">
+        <div>
+          <label class="text-xs text-dim block mb-1">imap host</label>
+          <input x-model="f.imapHost" @input="imapHostChanged()" name="imap_host" type="text" placeholder="imap.example.com" autocomplete="off" spellcheck="false"
+            class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+        </div>
+        <div>
+          <label class="text-xs text-dim block mb-1">port</label>
+          <input x-model="f.imapPort" name="imap_port" type="number" placeholder="993"
+            class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-[1fr_6rem] gap-2">
+        <div>
+          <label class="text-xs text-dim block mb-1">smtp host</label>
+          <input x-model="f.smtpHost" name="smtp_host" type="text" placeholder="smtp.example.com" autocomplete="off" spellcheck="false"
+            class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+        </div>
+        <div>
+          <label class="text-xs text-dim block mb-1">port</label>
+          <input x-model="f.smtpPort" name="smtp_port" type="number" placeholder="465"
+            class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+        </div>
+      </div>
+
+      <div>
+        <label class="text-xs text-dim block mb-1">email / username</label>
+        <input x-model="f.user" name="imap_user" type="email" placeholder="you@example.com" autocomplete="email"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+      </div>
+
+      <div>
+        <label class="text-xs text-dim block mb-1">password <span class="text-muted">(app password if 2fa enabled)</span></label>
+        <input name="imap_pass" type="password" placeholder="••••••••" autocomplete="current-password"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted">
+      </div>
+
+      ${error ? `<div class="text-xs text-red-600 py-1">${h(error)}</div>` : ''}
+
+      <button type="button" @click="submit()" :disabled="loading"
+        class="w-full bg-surface border border-dim text-sub text-xs rounded-md py-2.5 hover:text-white hover:border-sub transition-colors disabled:opacity-40">
+        <span x-text="loading ? 'connecting...' : 'authorize access'"></span>
+      </button>
+    </div>
+
+    <p class="text-xs text-dim mt-4 text-center">your credentials are never stored — they become the access token itself.</p>
+
+    <div class="mt-8 text-xs text-dim space-x-3 text-center">
+      <a href="https://undivisible.dev" class="hover:text-sub transition-colors">undivisible.dev</a>
+      <span class="text-border">·</span>
+      <a href="https://github.com/undivisible/unthinkmail" class="hover:text-sub transition-colors">source</a>
+    </div>
+
+  </div>
+</form>
+</body>
+</html>`;
+}
