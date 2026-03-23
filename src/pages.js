@@ -131,14 +131,27 @@ const ABOUT_SECTION = `
     </button>
 
     <div x-show="showAbout" x-transition class="mt-3 bg-surface border border-border rounded-lg p-5 space-y-4 text-xs text-sub">
+
+      <!-- Claude.ai (OAuth) -->
       <div>
-        <p class="text-body text-xs font-medium mb-1">1. get your key</p>
-        <p class="text-dim">enter your imap credentials above and click generate. the same credentials always produce the same key — enter them again any time to recover it. nothing is stored on our side.</p>
+        <p class="text-body text-xs font-medium mb-1">claude.ai <span class="text-dim font-normal">(easiest — no key needed)</span></p>
+        <p class="text-dim mb-2">claude.ai supports oauth and handles everything automatically.</p>
+        <ol class="text-dim space-y-1 list-decimal list-inside">
+          <li>go to claude.ai → settings → integrations</li>
+          <li>add a new mcp server with this url:</li>
+        </ol>
+        <div class="bg-black rounded-md p-3 mt-2 font-mono">
+          <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span>
+        </div>
+        <p class="text-dim mt-2">claude will open an authorization page where you enter your imap credentials. after that it manages the connection automatically — no key to copy or store.</p>
       </div>
 
+      <div class="border-t border-border"></div>
+
+      <!-- Claude Desktop / other clients (manual key) -->
       <div>
-        <p class="text-body text-xs font-medium mb-1">2. configure your ai client</p>
-        <p class="text-dim mb-2">your ai client needs two things:</p>
+        <p class="text-body text-xs font-medium mb-1">claude desktop &amp; other clients <span class="text-dim font-normal">(manual key)</span></p>
+        <p class="text-dim mb-2">for clients that don't support oauth, generate a key above and configure manually:</p>
         <div class="bg-black rounded-md p-3 space-y-1 font-mono">
           <p><span class="text-dim">endpoint</span>  <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span></p>
           <p><span class="text-dim">auth     </span>  <span class="text-sub">Bearer &lt;your key&gt;</span></p>
@@ -146,20 +159,25 @@ const ABOUT_SECTION = `
         <p class="text-dim mt-2">look for "mcp servers", "tools", or "integrations" in your ai app's settings. paste the endpoint and set the authorization header.</p>
       </div>
 
+      <div class="border-t border-border"></div>
+
       <div>
-        <p class="text-body text-xs font-medium mb-1">3. what the ai can do</p>
+        <p class="text-body text-xs font-medium mb-1">what the ai can do</p>
         <ul class="text-dim space-y-0.5 list-disc list-inside">
           <li>list your mail folders</li>
           <li>search messages by keyword, sender, date</li>
           <li>read full message content</li>
           <li>move messages between folders</li>
           <li>delete messages</li>
+          <li>send and reply to emails</li>
         </ul>
       </div>
 
+      <div class="border-t border-border"></div>
+
       <div>
         <p class="text-body text-xs font-medium mb-1">security</p>
-        <p class="text-dim">your key is your credentials, aes-256 encrypted. the server decrypts them per-request — nothing is stored. use an app-specific password if your provider supports it (gmail, outlook, fastmail all do). to revoke access, just disable the app password at your email provider.</p>
+        <p class="text-dim">your credentials are never stored — they're encoded into the access token itself and decrypted per-request. use an app-specific password if your provider supports it (gmail, outlook, fastmail all do). to revoke access, just disable the app password at your email provider.</p>
       </div>
     </div>
   </div>`;
