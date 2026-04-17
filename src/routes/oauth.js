@@ -35,6 +35,19 @@ function oauthError(error, description) {
   return json({ error, ...(description ? { error_description: description } : {}) }, 400);
 }
 
+function oauthServerError(description) {
+  return json({ error: 'server_error', ...(description ? { error_description: description } : {}) }, 500);
+}
+
+function requireOAuthSecret(env) {
+  const secret = env?.OAUTH_SECRET;
+  if (!secret || !String(secret).trim()) {
+    console.error('[oauth] OAUTH_SECRET is missing; refusing OAuth code/token operations');
+    return null;
+  }
+  return secret;
+}
+
 // GET /.well-known/oauth-authorization-server
 export async function handleOAuthMeta(request) {
   const o = new URL(request.url).origin;
@@ -83,6 +96,9 @@ export async function handleOAuthAuthorize(request, env) {
   }
 
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  const oauthSecret = requireOAuthSecret(env);
+  if (!oauthSecret) return oauthServerError('OAuth is not configured on this server');
 
   const form = await request.formData().catch(() => null);
   if (!form) return new Response('Invalid form data', { status: 400 });
@@ -139,7 +155,7 @@ export async function handleOAuthAuthorize(request, env) {
 
   const payloadJson = JSON.stringify({ k: umKey, cc: codeChallenge, ru: redirectUri, exp: Date.now() + 10 * 60 * 1000 });
   const payload = b64url(enc.encode(payloadJson));
-  const sig = await hmacSign(payload, env.OAUTH_SECRET || 'insecure-default');
+  const sig = await hmacSign(payload, oauthSecret);
   const code = `${payload}.${sig}`;
 
   const dest = new URL(redirectUri);
@@ -152,6 +168,9 @@ export async function handleOAuthAuthorize(request, env) {
 
 // POST /oauth/token — exchange PKCE-verified auth code for access_token (= um_ key)
 export async function handleOAuthToken(request, env) {
+  const oauthSecret = requireOAuthSecret(env);
+  if (!oauthSecret) return oauthServerError('OAuth is not configured on this server');
+
   let body;
   const ct = request.headers.get('Content-Type') || '';
   console.log('[oauth] token request ct=%s', ct);
@@ -177,8 +196,8 @@ export async function handleOAuthToken(request, env) {
   const payload = code.slice(0, dotIdx);
   const sig = code.slice(dotIdx + 1);
 
-  const valid = await hmacVerify(payload, sig, env.OAUTH_SECRET || 'insecure-default');
-  if (!valid) { console.log('[oauth] token: HMAC invalid, secret present=%s', !!env.OAUTH_SECRET); return oauthError('invalid_grant'); }
+  const valid = await hmacVerify(payload, sig, oauthSecret);
+  if (!valid) { console.log('[oauth] token: HMAC invalid'); return oauthError('invalid_grant'); }
 
   let data;
   try {

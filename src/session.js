@@ -181,7 +181,7 @@ export class ImapSession {
       user: c.smtp_user ?? c.imap_user,
       pass: c.smtp_pass ?? c.imap_pass,
       from: c.smtp_user ?? c.imap_user,
-      _creds: c, // pass full creds for custom from email/name
+      replyTo: c.smtp_reply_to ?? null,
     };
   }
 

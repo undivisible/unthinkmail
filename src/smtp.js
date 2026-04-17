@@ -16,7 +16,7 @@ const envelopeAddr = (s) => {
 const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
 
 export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {} }, creds) {
+  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {}, replyTo }, creds) {
     from    = sanitizeHeader(from);
     to      = sanitizeHeader(to);
     subject = sanitizeHeader(subject);
@@ -32,6 +32,8 @@ export class SmtpClient {
       }
       fromAddr = sanitizeHeader(fromAddr);
     }
+
+    const effectiveReplyTo = sanitizeHeader(replyTo || creds?.smtp_reply_to || '');
 
     const isSmtps = port === 465;
     const socket = connect({ hostname: host, port }, { secureTransport: isSmtps ? 'on' : 'starttls' });
@@ -126,14 +128,16 @@ export class SmtpClient {
         .map(([k, v]) => `${k}: ${sanitizeHeader(v)}\r\n`)
         .join('');
 
+      const replyToHeader = effectiveReplyTo ? `Reply-To: ${effectiveReplyTo}\r\n` : '';
+
       // Dot-stuff lines starting with "." per RFC 5321
       const stuffed = body
         .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
         .split('\n').map(l => l.startsWith('.') ? '.' + l : l).join('\r\n');
 
       await write(
-        `From: ${from}\r\nTo: ${to}\r\n${ccHeader}` +
-        `Subject: ${subject}\r\n${extraLines}` +
+        `From: ${fromAddr}\r\nTo: ${to}\r\n${ccHeader}` +
+        `Subject: ${subject}\r\n${replyToHeader}${extraLines}` +
         `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
         `${stuffed}\r\n.\r\n`
       );

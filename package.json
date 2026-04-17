@@ -4,8 +4,5 @@
   "type": "module",
   "devDependencies": {
     "wrangler": "^4.73.0"
-  },
-  "dependencies": {
-    "@cloudflare/containers": "^0.1.0"
   }
 }
