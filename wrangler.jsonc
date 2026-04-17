@@ -16,10 +16,6 @@
   },
   "migrations": [
     {
-      "tag": "v1",
-      "new_sqlite_classes": ["McpContainer"]
-    },
-    {
       "tag": "v2",
       "deleted_classes": ["McpContainer"],
       "new_sqlite_classes": ["ImapSession"]
