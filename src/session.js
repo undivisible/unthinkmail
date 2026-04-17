@@ -177,10 +177,11 @@ export class ImapSession {
     const c = this.#credentials;
     return {
       host: c.smtp_host,
-      port: c.smtp_port ?? 465,
+      port: c.smtp_port ?? 587,
       user: c.smtp_user ?? c.imap_user,
       pass: c.smtp_pass ?? c.imap_pass,
       from: c.smtp_user ?? c.imap_user,
+      _creds: c, // pass full creds for custom from email/name
     };
   }
 
@@ -213,7 +214,7 @@ export class ImapSession {
       if (!args.subject) return err(-32602, 'Missing subject');
       if (!args.body)    return err(-32602, 'Missing body');
       try {
-        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, cc: args.cc });
+        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, cc: args.cc }, this.#credentials);
         return toolOk(result);
       } catch (e) {
         return toolErr('SMTP error: ' + e.message);
@@ -248,7 +249,7 @@ export class ImapSession {
             'In-Reply-To': h.messageId,
             'References':  refs,
           },
-        });
+        }, this.#credentials);
         return toolOk(result);
       } catch (e) {
         await this.#disconnect();

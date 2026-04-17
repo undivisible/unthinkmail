@@ -49,9 +49,13 @@ function hub() {
     // form state
     f: {
       imapHost: '', imapPort: '993',
-      smtpHost: '', smtpPort: '465',
+      smtpHost: '', smtpPort: '587',
       user: '', pass: '',
+      fromEmail: '', fromName: '',
+      replyTo: '',
     },
+    showAdvanced: false,
+    providerNote: '',
     loading: false,
     key: null,
     error: null,
@@ -69,19 +73,20 @@ function hub() {
     // Populate from a known provider preset
     preset(p) {
       const presets = {
-        purelymail: { ih: 'imap.purelymail.com', ip: '993', sh: 'smtp.purelymail.com', sp: '465' },
-        gmail:      { ih: 'imap.gmail.com',       ip: '993', sh: 'smtp.gmail.com',      sp: '465' },
-        outlook:    { ih: 'outlook.office365.com', ip: '993', sh: 'smtp.office365.com', sp: '587' },
-        fastmail:   { ih: 'imap.fastmail.com',     ip: '993', sh: 'smtp.fastmail.com',  sp: '465' },
+        purelymail: { ih: 'imap.purelymail.com', ip: '993', sh: 'smtp.purelymail.com', sp: '587', note: 'Use your email password' },
+        gmail:      { ih: 'imap.gmail.com',       ip: '993', sh: 'smtp.gmail.com',      sp: '587', note: 'Requires app password (see below)' },
+        outlook:    { ih: 'outlook.office365.com', ip: '993', sh: 'smtp.office365.com', sp: '587', note: 'Use your email password' },
+        fastmail:   { ih: 'imap.fastmail.com',     ip: '993', sh: 'smtp.fastmail.com',  sp: '465', note: 'Use your password or app password' },
       };
       const r = presets[p]; if (!r) return;
       this.f.imapHost = r.ih; this.f.imapPort = r.ip;
       this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
+      this.providerNote = r.note;
     },
 
     async generate() {
       this.error = null;
-      const { imapHost, imapPort, smtpHost, smtpPort, user, pass } = this.f;
+      const { imapHost, imapPort, smtpHost, smtpPort, user, pass, fromEmail, fromName, replyTo } = this.f;
       if (!imapHost || !user || !pass) { this.error = 'imap host, username, and password are required'; return; }
       this.loading = true;
       try {
@@ -90,8 +95,11 @@ function hub() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             imap_host: imapHost, imap_port: parseInt(imapPort) || 993,
-            smtp_host: smtpHost || imapHost, smtp_port: parseInt(smtpPort) || 465,
+            smtp_host: smtpHost || imapHost, smtp_port: parseInt(smtpPort) || 587,
             imap_user: user, imap_pass: pass,
+            smtp_from_email: fromEmail || null,
+            smtp_from_name: fromName || null,
+            smtp_reply_to: replyTo || null,
           }),
         });
         const d = await r.json();
@@ -132,31 +140,14 @@ const ABOUT_SECTION = `
 
     <div x-show="showAbout" x-transition class="mt-3 bg-surface border border-border rounded-lg p-5 space-y-4 text-xs text-sub">
 
-      <!-- Claude.ai (OAuth) -->
+      <!-- Setup instructions for all MCP clients (OAuth) -->
       <div>
-        <p class="text-body text-xs font-medium mb-1">claude.ai <span class="text-dim font-normal">(easiest — no key needed)</span></p>
-        <p class="text-dim mb-2">claude.ai supports oauth and handles everything automatically.</p>
-        <ol class="text-dim space-y-1 list-decimal list-inside">
-          <li>go to claude.ai → settings → integrations</li>
-          <li>add a new mcp server with this url:</li>
-        </ol>
+        <p class="text-body text-xs font-medium mb-1">claude.ai, claude desktop, &amp; other mcp clients</p>
+        <p class="text-dim mb-2">all modern mcp clients support oauth — just add this server url:</p>
         <div class="bg-black rounded-md p-3 mt-2 font-mono">
           <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span>
         </div>
-        <p class="text-dim mt-2">claude will open an authorization page where you enter your imap credentials. after that it manages the connection automatically — no key to copy or store.</p>
-      </div>
-
-      <div class="border-t border-border"></div>
-
-      <!-- Claude Desktop / other clients (manual key) -->
-      <div>
-        <p class="text-body text-xs font-medium mb-1">claude desktop &amp; other clients <span class="text-dim font-normal">(manual key)</span></p>
-        <p class="text-dim mb-2">for clients that don't support oauth, generate a key above and configure manually:</p>
-        <div class="bg-black rounded-md p-3 space-y-1 font-mono">
-          <p><span class="text-dim">endpoint</span>  <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span></p>
-          <p><span class="text-dim">auth     </span>  <span class="text-sub">Bearer &lt;your key&gt;</span></p>
-        </div>
-        <p class="text-dim mt-2">look for "mcp servers", "tools", or "integrations" in your ai app's settings. paste the endpoint and set the authorization header.</p>
+        <p class="text-dim mt-2">your client will automatically open an authorization page where you enter your imap credentials. no manual key needed.</p>
       </div>
 
       <div class="border-t border-border"></div>
@@ -171,6 +162,54 @@ const ABOUT_SECTION = `
           <li>delete messages</li>
           <li>send and reply to emails</li>
         </ul>
+      </div>
+
+      <div class="border-t border-border"></div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">gmail app password setup</p>
+        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
+          <li>go to your google account → security</li>
+          <li>enable 2-step verification if not already on</li>
+          <li>search for "app passwords" or go to → app passwords</li>
+          <li>create a new app password named "unthinkmail"</li>
+          <li>use this 16-character password in the form above (not your regular gmail password)</li>
+        </ol>
+        <p class="text-dim text-xs mt-2">smtp uses port 587 (submission with tls). imap uses port 993.</p>
+      </div>
+
+      <div class="border-t border-border"></div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">outlook / office 365</p>
+        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
+          <li>sign in to your microsoft account</li>
+          <li>if using 2fa, go to security → app passwords</li>
+          <li>create a new app password for unthinkmail</li>
+          <li>use this password in the form above</li>
+        </ol>
+        <p class="text-dim text-xs mt-2">settings: imap.outlook.office365.com:993, smtp.office365.com:587 (tls). use your full email as username.</p>
+      </div>
+
+      <div class="border-t border-border"></div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">fastmail</p>
+        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
+          <li>go to fastmail → settings → security</li>
+          <li>scroll to "app passwords" and create a new one</li>
+          <li>name it "unthinkmail" and copy the password</li>
+          <li>use this password in the form above</li>
+        </ol>
+        <p class="text-dim text-xs mt-2">settings: imap.fastmail.com:993 (ssl), smtp.fastmail.com:465 (ssl) or 587 (starttls). use your full email as username.</p>
+      </div>
+
+      <div class="border-t border-border"></div>
+
+      <div>
+        <p class="text-body text-xs font-medium mb-1">purelymail</p>
+        <p class="text-dim text-xs">if you have 2fa enabled on your purelymail account, generate an app password in your account settings and use that. otherwise, use your regular password.</p>
+        <p class="text-dim text-xs mt-2">settings: imap.purelymail.com:993 (ssl), smtp.purelymail.com:587 (starttls).</p>
       </div>
 
       <div class="border-t border-border"></div>
@@ -247,6 +286,35 @@ export const HUB = `<!DOCTYPE html>
         @keydown.enter="generate()"
         class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted">
     </div>
+
+    <!-- Advanced options toggle -->
+    <button @click="showAdvanced = !showAdvanced" type="button"
+      class="text-xs text-dim flex items-center gap-1 hover:text-sub transition-colors">
+      <span x-text="showAdvanced ? '−' : '+'"></span>
+      <span>advanced send options</span>
+    </button>
+
+    <!-- Advanced send options -->
+    <div x-show="showAdvanced" x-transition class="space-y-3 pt-2">
+      <div>
+        <label class="text-xs text-dim block mb-1">from email <span class="text-muted">(optional — defaults to username)</span></label>
+        <input x-model="f.fromEmail" type="email" placeholder="different@domain.com"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+      </div>
+      <div>
+        <label class="text-xs text-dim block mb-1">from name <span class="text-muted">(optional)</span></label>
+        <input x-model="f.fromName" type="text" placeholder="Your Name"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted">
+      </div>
+      <div>
+        <label class="text-xs text-dim block mb-1">reply-to address <span class="text-muted">(optional)</span></label>
+        <input x-model="f.replyTo" type="email" placeholder="reply@different.com"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+      </div>
+    </div>
+
+    <!-- Provider-specific note -->
+    <div x-show="providerNote" class="text-xs text-amber-700 mt-1" x-text="providerNote"></div>
 
     <div x-show="error" class="text-xs text-red-600 py-1" x-text="error"></div>
 

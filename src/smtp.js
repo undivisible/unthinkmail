@@ -16,11 +16,22 @@ const envelopeAddr = (s) => {
 const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
 
 export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {} }) {
+  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {} }, creds) {
     from    = sanitizeHeader(from);
     to      = sanitizeHeader(to);
     subject = sanitizeHeader(subject);
     if (cc) cc = Array.isArray(cc) ? cc.map(sanitizeHeader) : sanitizeHeader(cc);
+
+    // Override from address if custom SMTP sender configured
+    let fromAddr = from;
+    if (creds?.smtp_from_email) {
+      if (creds.smtp_from_name) {
+        fromAddr = `${creds.smtp_from_name} <${creds.smtp_from_email}>`;
+      } else {
+        fromAddr = creds.smtp_from_email;
+      }
+      fromAddr = sanitizeHeader(fromAddr);
+    }
 
     const isSmtps = port === 465;
     const socket = connect({ hostname: host, port }, { secureTransport: isSmtps ? 'on' : 'starttls' });
@@ -92,7 +103,7 @@ export class SmtpClient {
       const authResp = await readResp();
       if (!authResp.startsWith('235')) throw new Error('Auth failed: ' + authResp);
 
-      await write(`MAIL FROM:<${envelopeAddr(from)}>\r\n`);
+      await write(`MAIL FROM:<${envelopeAddr(fromAddr)}>\r\n`);
       const fromResp = await readResp();
       if (!fromResp.startsWith('250')) throw new Error('MAIL FROM failed: ' + fromResp);
 
