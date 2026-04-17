@@ -22,13 +22,28 @@ function fromB64url(s) {
 }
 
 async function hmacSign(payload, secret) {
+  if (!secret) throw new Error('Missing OAUTH_SECRET');
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(payload));
   return b64url(new Uint8Array(sig));
 }
 
 async function hmacVerify(payload, sig, secret) {
-  return (await hmacSign(payload, secret)) === sig;
+  if (!secret) return false;
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  let sigBin;
+  try {
+    sigBin = b64urlToBytes(sig);
+  } catch {
+    return false;
+  }
+  return crypto.subtle.verify('HMAC', key, sigBin, enc.encode(payload));
+}
+
+function b64urlToBytes(s) {
+  let b = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (b.length % 4) b += '=';
+  return Uint8Array.from(atob(b), c => c.charCodeAt(0));
 }
 
 function oauthError(error, description) {
@@ -40,9 +55,13 @@ function oauthServerError(description) {
 }
 
 function requireOAuthSecret(env) {
-  const secret = env?.OAUTH_SECRET;
-  if (!secret || !String(secret).trim()) {
+  const secret = String(env?.OAUTH_SECRET ?? '').trim();
+  if (!secret) {
     console.error('[oauth] OAUTH_SECRET is missing; refusing OAuth code/token operations');
+    return null;
+  }
+  if (secret.length < 32) {
+    console.error('[oauth] OAUTH_SECRET is too short; require at least 32 characters');
     return null;
   }
   return secret;
@@ -106,9 +125,12 @@ export async function handleOAuthAuthorize(request, env) {
   const redirectUri = form.get('redirect_uri');
   const state = form.get('state');
   const codeChallenge = form.get('code_challenge');
+  const codeChallengeMethod = form.get('code_challenge_method') || 'S256';
   const clientId = form.get('client_id');
 
   if (!redirectUri) return new Response('Missing redirect_uri', { status: 400 });
+  if (!codeChallenge) return new Response('Missing code_challenge', { status: 400 });
+  if (codeChallengeMethod !== 'S256') return new Response('Unsupported code_challenge_method', { status: 400 });
 
   // Validate redirect_uri against registered client
   if (clientId) {
@@ -118,7 +140,7 @@ export async function handleOAuthAuthorize(request, env) {
         return new Response('redirect_uri not registered for this client', { status: 400 });
       }
     } catch {
-      // Lenient: if client_id can't be decoded, proceed anyway
+      return new Response('Invalid client_id', { status: 400 });
     }
   }
 
@@ -153,7 +175,13 @@ export async function handleOAuthAuthorize(request, env) {
   };
   const umKey = await encodeKey(creds);
 
-  const payloadJson = JSON.stringify({ k: umKey, cc: codeChallenge, ru: redirectUri, exp: Date.now() + 10 * 60 * 1000 });
+  const payloadJson = JSON.stringify({
+    k: umKey,
+    cc: codeChallenge,
+    ru: redirectUri,
+    ci: clientId || null,
+    exp: Date.now() + 10 * 60 * 1000,
+  });
   const payload = b64url(enc.encode(payloadJson));
   const sig = await hmacSign(payload, oauthSecret);
   const code = `${payload}.${sig}`;
@@ -187,7 +215,7 @@ export async function handleOAuthToken(request, env) {
 
   if (body.grant_type !== 'authorization_code') return oauthError('unsupported_grant_type');
 
-  const { code, code_verifier, redirect_uri } = body;
+  const { code, code_verifier, redirect_uri, client_id } = body;
   if (!code) return oauthError('invalid_request', 'Missing code');
   if (!code_verifier) return oauthError('invalid_request', 'Missing code_verifier');
 
@@ -214,13 +242,16 @@ export async function handleOAuthToken(request, env) {
     return oauthError('invalid_grant', 'redirect_uri mismatch');
   }
 
-  if (data.cc) {
-    const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode(code_verifier));
-    const challenge = b64url(new Uint8Array(hashBuf));
-    if (challenge !== data.cc) {
-      console.log('[oauth] token: PKCE failed computed=%s stored=%s', challenge, data.cc);
-      return oauthError('invalid_grant', 'PKCE verification failed');
-    }
+  if (client_id && data.ci && client_id !== data.ci) {
+    console.log('[oauth] token: client_id mismatch got=%s want=%s', client_id, data.ci);
+    return oauthError('invalid_grant', 'client_id mismatch');
+  }
+
+  const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode(code_verifier));
+  const challenge = b64url(new Uint8Array(hashBuf));
+  if (challenge !== data.cc) {
+    console.log('[oauth] token: PKCE failed computed=%s stored=%s', challenge, data.cc);
+    return oauthError('invalid_grant', 'PKCE verification failed');
   }
 
   console.log('[oauth] token: success issuing access_token');
