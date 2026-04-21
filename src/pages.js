@@ -52,7 +52,7 @@ function hub() {
       smtpHost: '', smtpPort: '587',
       user: '', pass: '',
       fromEmail: '', fromName: '',
-      replyTo: '',
+      replyTo: '', signature: '',
     },
     showAdvanced: false,
     providerNote: '',
@@ -86,7 +86,7 @@ function hub() {
 
     async generate() {
       this.error = null;
-      const { imapHost, imapPort, smtpHost, smtpPort, user, pass, fromEmail, fromName, replyTo } = this.f;
+      const { imapHost, imapPort, smtpHost, smtpPort, user, pass, fromEmail, fromName, replyTo, signature } = this.f;
       if (!imapHost || !user || !pass) { this.error = 'imap host, username, and password are required'; return; }
       this.loading = true;
       try {
@@ -100,6 +100,7 @@ function hub() {
             smtp_from_email: fromEmail || null,
             smtp_from_name: fromName || null,
             smtp_reply_to: replyTo || null,
+            smtp_signature: signature || null,
           }),
         });
         const d = await r.json();
@@ -310,6 +311,11 @@ export const HUB = `<!DOCTYPE html>
         <label class="text-xs text-dim block mb-1">reply-to address <span class="text-muted">(optional)</span></label>
         <input x-model="f.replyTo" type="email" placeholder="reply@different.com"
           class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+      </div>
+      <div>
+        <label class="text-xs text-dim block mb-1">signature <span class="text-muted">(optional — appended to sent emails)</span></label>
+        <textarea x-model="f.signature" rows="3" placeholder="--&#10;John Doe&#10;Software Engineer"
+          class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted resize-none font-mono"></textarea>
       </div>
     </div>
 

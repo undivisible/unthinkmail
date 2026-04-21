@@ -182,6 +182,7 @@ export class ImapSession {
       pass: c.smtp_pass ?? c.imap_pass,
       from: c.smtp_user ?? c.imap_user,
       replyTo: c.smtp_reply_to ?? null,
+      signature: c.smtp_signature ?? null,
     };
   }
 

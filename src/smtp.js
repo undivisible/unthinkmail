@@ -16,7 +16,10 @@ const envelopeAddr = (s) => {
 const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
 
 export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {}, replyTo }, creds) {
+  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {}, replyTo, signature }, creds) {
+    // Append signature to body if configured
+    const sig = signature || creds?.smtp_signature;
+    const signedBody = sig ? `${body}\r\n\r\n${sig}` : body;
     from    = sanitizeHeader(from);
     to      = sanitizeHeader(to);
     subject = sanitizeHeader(subject);
@@ -131,7 +134,7 @@ export class SmtpClient {
       const replyToHeader = effectiveReplyTo ? `Reply-To: ${effectiveReplyTo}\r\n` : '';
 
       // Dot-stuff lines starting with "." per RFC 5321
-      const stuffed = body
+      const stuffed = signedBody
         .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
         .split('\n').map(l => l.startsWith('.') ? '.' + l : l).join('\r\n');
 

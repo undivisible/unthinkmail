@@ -153,6 +153,7 @@ export async function handleOAuthAuthorize(request, env) {
   const smtpFromEmail = form.get('smtp_from_email')?.trim() || null;
   const smtpFromName = form.get('smtp_from_name')?.trim() || null;
   const smtpReplyTo = form.get('smtp_reply_to')?.trim() || null;
+  const smtpSignature = form.get('smtp_signature')?.trim() || null;
 
   const oauthParams = { redirect_uri: redirectUri, state, code_challenge: codeChallenge, client_id: clientId };
 
@@ -172,6 +173,7 @@ export async function handleOAuthAuthorize(request, env) {
     smtp_from_email: smtpFromEmail,
     smtp_from_name: smtpFromName,
     smtp_reply_to: smtpReplyTo,
+    smtp_signature: smtpSignature,
   };
   const umKey = await encodeKey(creds);
 
@@ -287,7 +289,7 @@ function oauthForm() {
       imapHost: '', imapPort: '993', 
       smtpHost: '', smtpPort: '587', 
       user: '', pass: '',
-      fromEmail: '', fromName: '', replyTo: '',
+      fromEmail: '', fromName: '', replyTo: '', signature: '',
     },
     showAdvanced: false,
     providerNote: '',
@@ -425,6 +427,11 @@ function oauthForm(params, error) {
           <label class="text-xs text-dim block mb-1">reply-to address <span class="text-muted">(optional)</span></label>
           <input x-model="f.replyTo" name="smtp_reply_to" type="email" placeholder="reply@different.com"
             class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted font-mono">
+        </div>
+        <div>
+          <label class="text-xs text-dim block mb-1">signature <span class="text-muted">(optional — appended to sent emails)</span></label>
+          <textarea x-model="f.signature" name="smtp_signature" rows="3" placeholder="--&#10;John Doe&#10;Software Engineer"
+            class="w-full bg-black border border-border text-body text-sm rounded-md px-3 py-2 outline-none focus:border-dim placeholder-muted resize-none font-mono"></textarea>
         </div>
       </div>
 
