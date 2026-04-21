@@ -91,21 +91,21 @@ const TOOLS = [
 },
   {
     name: 'sendemail',
-    description: 'Compose and send a new email via SMTP. to can be a string or array of addresses.',
+    description: 'Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address.',
     inputSchema: {
       type: 'object',
       properties: {
-        to:      { type: 'string', description: 'Recipient email (or comma-separated list)' },
-        subject: { type: 'string' },
+        to:      { type: 'string', description: 'Recipient email(s): "alice@example.com", "alice@example.com,bob@example.com", or ["alice@example.com","bob@example.com"]' },
+        subject: { type: 'string', description: 'Email subject line' },
         body:    { type: 'string', description: 'Plain text email body' },
-        cc:      { type: 'string', description: 'Optional CC address(es)' },
+        cc:      { type: 'string', description: 'Optional CC: same formats as "to"' },
       },
       required: ['to', 'subject', 'body'],
     },
   },
   {
     name: 'batchsend',
-    description: 'Send multiple emails in a single call. Takes an array of {to, subject, body, cc} objects.',
+    description: 'Send multiple emails in one call. Each email supports multiple recipients via comma-separated string, array, or single address.',
     inputSchema: {
       type: 'object',
       properties: {
