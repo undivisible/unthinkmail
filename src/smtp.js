@@ -21,8 +21,15 @@ export class SmtpClient {
     const sig = signature || creds?.smtp_signature;
     const signedBody = sig ? `${body}\r\n\r\n${sig}` : body;
     from    = sanitizeHeader(from);
-    // Allow to be string or array of addresses
-    const toList = Array.isArray(to) ? to.map(sanitizeHeader) : sanitizeHeader(to);
+    // Allow to be string (comma-separated), array, or single address
+    let toList;
+    if (Array.isArray(to)) {
+      toList = to.map(sanitizeHeader);
+    } else if (String(to).includes(',')) {
+      toList = to.split(',').map(sanitizeHeader);
+    } else {
+      toList = [sanitizeHeader(to)];
+    }
     subject = sanitizeHeader(subject);
     if (cc) cc = Array.isArray(cc) ? cc.map(sanitizeHeader) : sanitizeHeader(cc);
 
