@@ -104,6 +104,30 @@ const TOOLS = [
     },
   },
   {
+    name: 'batchsend',
+    description: 'Send multiple emails in a single call. Takes an array of {to, subject, body, cc} objects.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emails: {
+          type: 'array',
+          description: 'Array of emails to send',
+          items: {
+            type: 'object',
+            properties: {
+              to:      { type: 'string' },
+              subject: { type: 'string' },
+              body:    { type: 'string' },
+              cc:      { type: 'string' },
+            },
+            required: ['to', 'subject', 'body'],
+          },
+        },
+      },
+      required: ['emails'],
+    },
+  },
+  {
     name: 'replyemail',
     description: 'Reply to an existing message, preserving threading headers (In-Reply-To / References)',
     inputSchema: {
@@ -220,6 +244,27 @@ export class ImapSession {
       } catch (e) {
         return toolErr('SMTP error: ' + e.message);
       }
+    }
+
+    // --- batchsend (multiple emails) ---
+    if (name === 'batchsend') {
+      const emails = args.emails;
+      if (!Array.isArray(emails) || emails.length === 0) return err(-32602, 'Missing emails array');
+      if (emails.length > 50) return err(-32602, 'Maximum 50 emails per batch');
+      const results = [];
+      for (const email of emails) {
+        if (!email.to || !email.subject || !email.body) {
+          results.push({ to: email.to, ok: false, error: 'Missing required field' });
+          continue;
+        }
+        try {
+          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, cc: email.cc }, this.#credentials);
+          results.push({ to: email.to, ok: true, ...r });
+        } catch (e) {
+          results.push({ to: email.to, ok: false, error: e.message });
+        }
+      }
+      return toolOk({ sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
     }
 
     // --- replyemail (needs IMAP for headers, then SMTP) ---
