@@ -21,7 +21,8 @@ export class SmtpClient {
     const sig = signature || creds?.smtp_signature;
     const signedBody = sig ? `${body}\r\n\r\n${sig}` : body;
     from    = sanitizeHeader(from);
-    to      = sanitizeHeader(to);
+    // Allow to be string or array of addresses
+    const toList = Array.isArray(to) ? to.map(sanitizeHeader) : sanitizeHeader(to);
     subject = sanitizeHeader(subject);
     if (cc) cc = Array.isArray(cc) ? cc.map(sanitizeHeader) : sanitizeHeader(cc);
 
@@ -112,7 +113,7 @@ export class SmtpClient {
       const fromResp = await readResp();
       if (!fromResp.startsWith('250')) throw new Error('MAIL FROM failed: ' + fromResp);
 
-      const recipients = [to, ...(Array.isArray(cc) ? cc : cc ? [cc] : [])].filter(Boolean);
+      const recipients = [...toList, ...(Array.isArray(cc) ? cc : cc ? [cc] : [])].filter(Boolean);
       for (const r of recipients) {
         await write(`RCPT TO:<${envelopeAddr(r)}>\r\n`);
         const rcptResp = await readResp();
@@ -123,7 +124,8 @@ export class SmtpClient {
       const dataResp = await readResp();
       if (!dataResp.startsWith('354')) throw new Error('DATA failed: ' + dataResp);
 
-      const ccHeader = recipients.length > 1 ? `Cc: ${recipients.slice(1).join(', ')}\r\n` : '';
+      const toHeader = Array.isArray(to) ? to.join(', ') : to;
+      const ccHeader = toList.length > 1 && recipients.length > toList.length ? `Cc: ${recipients.slice(toList.length).join(', ')}\r\n` : '';
 
       // Build extra headers (e.g. In-Reply-To, References)
       const extraLines = Object.entries(extraHeaders)
@@ -139,7 +141,7 @@ export class SmtpClient {
         .split('\n').map(l => l.startsWith('.') ? '.' + l : l).join('\r\n');
 
       await write(
-        `From: ${fromAddr}\r\nTo: ${to}\r\n${ccHeader}` +
+        `From: ${fromAddr}\r\nTo: ${toHeader}\r\n${ccHeader}` +
         `Subject: ${subject}\r\n${replyToHeader}${extraLines}` +
         `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
         `${stuffed}\r\n.\r\n`
@@ -149,7 +151,7 @@ export class SmtpClient {
       if (!sentResp.startsWith('250')) throw new Error('Send failed: ' + sentResp);
 
       await write('QUIT\r\n');
-      return { sent: true, to, subject };
+      return { sent: true, to: toHeader, subject };
     } finally {
       try { await state.writer.close(); } catch {}
       try { state.reader.cancel(); } catch {}

@@ -91,14 +91,14 @@ const TOOLS = [
   },
   {
     name: 'sendemail',
-    description: 'Compose and send a new email via SMTP',
+    description: 'Compose and send a new email via SMTP.to can be a single address or array.',
     inputSchema: {
       type: 'object',
       properties: {
-        to:      { type: 'string', description: 'Recipient email address' },
+        to:      { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } } }], description: 'Recipient email address(es)' },
         subject: { type: 'string' },
         body:    { type: 'string', description: 'Plain text email body' },
-        cc:      { type: 'string', description: 'Optional CC address' },
+        cc:      { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } } }, null], description: 'Optional CC address(es)' },
       },
       required: ['to', 'subject', 'body'],
     },
