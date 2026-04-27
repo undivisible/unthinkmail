@@ -25,6 +25,7 @@ export class ImapClient {
   #bufLen = 0;
   #tagCounter = 0;
   #authenticated = false;
+  #selectedFolder = null;
 
   isConnected() { return this.#authenticated; }
 
@@ -49,6 +50,7 @@ export class ImapClient {
 
   async close() {
     this.#authenticated = false;
+    this.#selectedFolder = null;
     try { await this.#write(`${this.#tag()} LOGOUT\r\n`); } catch {}
     try { await this.#writer?.close(); } catch {}
     try { this.#reader?.cancel(); } catch {}
@@ -67,7 +69,7 @@ export class ImapClient {
   }
 
   async searchMessages(folder, query) {
-    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    await this.#selectIfNeeded(folder);
     const resp = await this.#cmd(`UID SEARCH ${query}`);
     const uids = [];
     for (const line of resp.split('\n')) {
@@ -79,7 +81,7 @@ export class ImapClient {
 
   // Fetch a message and return parsed MIME structure
   async getMessage(folder, uid) {
-    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    await this.#selectIfNeeded(folder);
     const safeUid = validateUid(uid);
     const raw = await this.#fetchLiteral(safeUid, 'BODY.PEEK[]');
     if (raw === null) return { uid, error: 'no_literal' };
@@ -88,13 +90,13 @@ export class ImapClient {
     return { uid, ...parsed };
   }
 
-  // Fetch only the headers needed to construct a reply (Message-ID, References, From, Reply-To, Subject)
+  // Fetch only the headers needed to construct a reply / thread
   async fetchHeaders(folder, uid) {
-    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    await this.#selectIfNeeded(folder);
     const safeUid = validateUid(uid);
     const raw = await this.#fetchLiteral(
       safeUid,
-      'BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO SUBJECT MESSAGE-ID REFERENCES IN-REPLY-TO)]'
+      'BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO SUBJECT MESSAGE-ID REFERENCES IN-REPLY-TO DATE TO)]'
     );
     if (raw === null) return {};
 
@@ -114,12 +116,14 @@ export class ImapClient {
       messageId:  map['message-id'] || '',
       references: map['references'] || '',
       inReplyTo:  map['in-reply-to'] || '',
+      date:       map['date'] || '',
+      to:         map['to'] || '',
     };
   }
 
   async deleteMessage(folder, uid) {
     const safeUid = validateUid(uid);
-    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    await this.#selectIfNeeded(folder);
     await this.#cmd(`UID STORE ${safeUid} +FLAGS (\\Deleted)`);
     await this.#cmd('EXPUNGE');
     return { deleted: true };
@@ -127,7 +131,7 @@ export class ImapClient {
 
   async moveMessage(folder, uid, destination) {
     const safeUid = validateUid(uid);
-    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    await this.#selectIfNeeded(folder);
     // Try UID MOVE (RFC 6851), fall back to COPY+DELETE
     const tag = this.#tag();
     await this.#write(`${tag} UID MOVE ${safeUid} ${imapQuote(destination)}\r\n`);
@@ -140,11 +144,220 @@ export class ImapClient {
     return { moved: true };
   }
 
+  // Set or clear IMAP flags on one or more messages.
+  // uid may be a single UID or a pre-validated sequence set string (e.g. "1,5,10:15")
+  async storeFlags(folder, uid, op, flags) {
+    await this.#selectIfNeeded(folder);
+    const safeUid = validateUid(uid);
+    const flagStr = '(' + flags.join(' ') + ')';
+    await this.#cmd(`UID STORE ${safeUid} ${op} ${flagStr}`);
+    return { stored: true };
+  }
+
+  // Fetch raw BODYSTRUCTURE response for a message (parsed by mime.js parseBodyStructure)
+  async fetchBodyStructure(folder, uid) {
+    await this.#selectIfNeeded(folder);
+    const safeUid = validateUid(uid);
+    const tag = this.#tag();
+    await this.#write(`${tag} UID FETCH ${safeUid} (BODYSTRUCTURE)\r\n`);
+    return await this.#readUntilTag(tag);
+  }
+
+  // Fetch a specific MIME body part by part number (e.g. "1", "2", "1.2")
+  async fetchBodyPart(folder, uid, partNum) {
+    await this.#selectIfNeeded(folder);
+    const safeUid = validateUid(uid);
+    if (!/^\d+(\.\d+)*$/.test(String(partNum))) throw new Error('Invalid part number: ' + partNum);
+    return await this.#fetchLiteral(safeUid, `BODY.PEEK[${partNum}]`);
+  }
+
+  // Move a sequence set of UIDs to destination; falls back to COPY+DELETE if MOVE unsupported
+  async bulkMove(folder, uidSeq, destination) {
+    await this.#selectIfNeeded(folder);
+    const tag = this.#tag();
+    await this.#write(`${tag} UID MOVE ${uidSeq} ${imapQuote(destination)}\r\n`);
+    const resp = await this.#readUntilTag(tag);
+    if (!this.#lastLine(resp, tag).startsWith('OK')) {
+      await this.#cmd(`UID COPY ${uidSeq} ${imapQuote(destination)}`);
+      await this.#cmd(`UID STORE ${uidSeq} +FLAGS (\\Deleted)`);
+      await this.#cmd('EXPUNGE');
+    }
+    return { moved: true };
+  }
+
+  async expunge() {
+    await this.#cmd('EXPUNGE');
+  }
+
+  async createFolder(name) {
+    const tag = this.#tag();
+    await this.#write(`${tag} CREATE ${imapQuote(name)}\r\n`);
+    const resp = await this.#readUntilTag(tag);
+    if (!this.#lastLine(resp, tag).startsWith('OK')) throw new Error('CREATE failed: ' + this.#lastLine(resp, tag));
+    return { created: true, folder: name };
+  }
+
+  async renameFolder(name, newName) {
+    const tag = this.#tag();
+    await this.#write(`${tag} RENAME ${imapQuote(name)} ${imapQuote(newName)}\r\n`);
+    const resp = await this.#readUntilTag(tag);
+    if (!this.#lastLine(resp, tag).startsWith('OK')) throw new Error('RENAME failed: ' + this.#lastLine(resp, tag));
+    if (this.#selectedFolder === name) this.#selectedFolder = null;
+    return { renamed: true, from: name, to: newName };
+  }
+
+  async deleteFolder(name) {
+    const tag = this.#tag();
+    await this.#write(`${tag} DELETE ${imapQuote(name)}\r\n`);
+    const resp = await this.#readUntilTag(tag);
+    if (!this.#lastLine(resp, tag).startsWith('OK')) throw new Error('DELETE failed: ' + this.#lastLine(resp, tag));
+    if (this.#selectedFolder === name) this.#selectedFolder = null;
+    return { deleted: true, folder: name };
+  }
+
+  // Get message/unseen/recent counts for a folder via STATUS command.
+  // Intentionally does NOT call #selectIfNeeded — STATUS works on non-selected folders.
+  async getFolderStatus(folder) {
+    const resp = await this.#cmd(`STATUS ${imapQuote(folder)} (MESSAGES UNSEEN RECENT UIDNEXT)`);
+    const result = { folder, messages: 0, unseen: 0, recent: 0, uidNext: 0 };
+    const m = resp.match(/\bSTATUS\s+(?:"[^"]*"|\S+)\s+\(([^)]+)\)/i);
+    if (m) {
+      const parts = m[1].trim().split(/\s+/);
+      for (let i = 0; i + 1 < parts.length; i += 2) {
+        const key = parts[i].toLowerCase();
+        const val = parseInt(parts[i + 1]) || 0;
+        if (key === 'messages') result.messages = val;
+        if (key === 'unseen')   result.unseen   = val;
+        if (key === 'recent')   result.recent   = val;
+        if (key === 'uidnext')  result.uidNext  = val;
+      }
+    }
+    return result;
+  }
+
+  // Lightweight flag + size fetch — no body download needed
+  async fetchMessageStatus(folder, uid) {
+    await this.#selectIfNeeded(folder);
+    const safeUid = validateUid(uid);
+    const resp = await this.#cmd(`UID FETCH ${safeUid} (UID FLAGS RFC822.SIZE)`);
+    const result = { uid: safeUid, flags: [], seen: false, flagged: false, size: 0 };
+    for (const line of resp.split('\n')) {
+      if (!line.startsWith('* ')) continue;
+      const uidM   = line.match(/\bUID (\d+)/i);
+      if (uidM) result.uid = uidM[1];
+      const flagsM = line.match(/\bFLAGS \(([^)]*)\)/i);
+      if (flagsM) {
+        result.flags   = flagsM[1].trim().split(/\s+/).filter(Boolean);
+        result.seen    = result.flags.some(f => f.toLowerCase() === '\\seen');
+        result.flagged = result.flags.some(f => f.toLowerCase() === '\\flagged');
+      }
+      const sizeM = line.match(/\bRFC822\.SIZE (\d+)/i);
+      if (sizeM) result.size = parseInt(sizeM[1]);
+    }
+    return result;
+  }
+
+  // Batch header fetch — returns array of { uid, flags, internalDate, headerLiteral }
+  async fetchMultiple(folder, uids) {
+    if (!uids || uids.length === 0) return [];
+    await this.#selectIfNeeded(folder);
+    const uidSeq = uids.map(u => validateUid(u)).join(',');
+
+    const tag = this.#tag();
+    await this.#write(`${tag} UID FETCH ${uidSeq} (UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID)])\r\n`);
+
+    const messages = [];
+    let current = null;
+
+    while (true) {
+      const line = await this.#readLine();
+      if (line.startsWith(tag + ' ')) break;
+
+      // New FETCH response
+      if (/^\* \d+ FETCH/i.test(line)) {
+        current = { uid: null, flags: [], internalDate: '', headerLiteral: '' };
+        messages.push(current);
+      }
+
+      // Extract fields from any line belonging to the current message
+      if (current) {
+        const uidM = line.match(/\bUID (\d+)/i);
+        if (uidM && !current.uid) current.uid = uidM[1];
+
+        const flagsM = line.match(/\bFLAGS \(([^)]*)\)/i);
+        if (flagsM) current.flags = flagsM[1].trim().split(/\s+/).filter(Boolean);
+
+        const dateM = line.match(/\bINTERNALDATE "([^"]+)"/i);
+        if (dateM) current.internalDate = dateM[1];
+      }
+
+      // Literal block
+      const litM = line.match(/\{(\d+)\}$/);
+      if (litM && current) {
+        const bytes = await this.#readBytes(parseInt(litM[1], 10));
+        current.headerLiteral = dec.decode(bytes);
+      }
+    }
+
+    return messages;
+  }
+
+  // APPEND a raw RFC 2822 message to a folder (used for saving drafts)
+  async appendMessage(folder, rawMessage, flags = ['\\Draft']) {
+    const msgBytes = enc.encode(rawMessage);
+    const flagStr = '(' + flags.join(' ') + ')';
+    const tag = this.#tag();
+    await this.#write(`${tag} APPEND ${imapQuote(folder)} ${flagStr} {${msgBytes.length}}\r\n`);
+
+    // Server sends a '+' continuation before we upload the literal
+    const cont = await this.#readLine();
+    if (!cont.startsWith('+')) throw new Error('APPEND continuation expected, got: ' + cont);
+
+    await this.#writer.write(msgBytes);
+    await this.#write('\r\n');
+
+    const resp = await this.#readUntilTag(tag);
+    if (!this.#lastLine(resp, tag).startsWith('OK')) {
+      throw new Error('APPEND failed: ' + this.#lastLine(resp, tag));
+    }
+
+    // Invalidate SELECT cache — APPEND can affect folder state
+    this.#selectedFolder = null;
+    return { appended: true, folder };
+  }
+
+  // Detect the Drafts folder by \Drafts attribute, then common name fallbacks
+  async findDraftsFolder() {
+    const resp = await this.#cmd('LIST "" "*"');
+    for (const line of resp.split('\n')) {
+      if (!line.startsWith('* LIST')) continue;
+      if (/\\Drafts/i.test(line)) {
+        const m = line.match(/"([^"]*)"$/) || line.match(/(\S+)$/);
+        if (m) return m[1];
+      }
+    }
+    for (const name of ['Drafts', 'INBOX.Drafts', '[Gmail]/Drafts', 'Draft']) {
+      try {
+        await this.#cmd(`SELECT ${imapQuote(name)}`);
+        this.#selectedFolder = name;
+        return name;
+      } catch {}
+    }
+    return 'Drafts';
+  }
+
   // --- internals ---
 
   #tag() { return `T${++this.#tagCounter}`; }
 
   async #write(s) { await this.#writer.write(enc.encode(s)); }
+
+  // Select a folder only if it isn't already selected — avoids redundant round-trips
+  async #selectIfNeeded(folder) {
+    if (this.#selectedFolder === folder) return;
+    await this.#cmd(`SELECT ${imapQuote(folder)}`);
+    this.#selectedFolder = folder;
+  }
 
   // Issue a UID FETCH for a single item (e.g. BODY.PEEK[] or BODY.PEEK[HEADER...])
   // Returns the decoded literal string, or null if no literal found

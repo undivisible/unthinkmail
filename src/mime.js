@@ -189,3 +189,140 @@ export function parseMime(raw) {
 
   return { from, to, subject, date, messageId, references, inReplyTo, body, hasHtml: html !== null, attachments };
 }
+
+// ---------------------------------------------------------------------------
+// BODYSTRUCTURE parser
+// ---------------------------------------------------------------------------
+// parseBodyStructure(rawFetchResponse) → PartDescriptor[]
+// where PartDescriptor = { partNum, type, subtype, encoding, size, filename, disp }
+//
+// Parses the raw IMAP FETCH response line(s) that contain a BODYSTRUCTURE
+// parenthesised list and returns a flat array of leaf-part descriptors so
+// callers can locate an attachment by filename and fetch it by part number.
+
+function tokenizeBS(s) {
+  const tokens = [];
+  let i = 0;
+  while (i < s.length) {
+    // skip whitespace
+    if (s[i] === ' ' || s[i] === '\t' || s[i] === '\r' || s[i] === '\n') { i++; continue; }
+    if (s[i] === '(') { tokens.push({ t: '(' }); i++; continue; }
+    if (s[i] === ')') { tokens.push({ t: ')' }); i++; continue; }
+    if (s[i] === '"') {
+      let val = '';
+      i++;
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === '\\') i++;
+        val += s[i++];
+      }
+      i++; // closing "
+      tokens.push({ t: 'str', v: val });
+      continue;
+    }
+    // atom (NIL, numbers, encoding names, etc.)
+    let val = '';
+    while (i < s.length && s[i] !== '(' && s[i] !== ')' && s[i] !== '"' && s[i] !== ' ' && s[i] !== '\t' && s[i] !== '\r' && s[i] !== '\n') {
+      val += s[i++];
+    }
+    tokens.push({ t: 'atom', v: val.toUpperCase() === 'NIL' ? null : val });
+  }
+  return tokens;
+}
+
+function parseBSList(tokens, pos) {
+  // tokens[pos] must be '('
+  pos++; // consume '('
+  const items = [];
+  while (pos < tokens.length && tokens[pos].t !== ')') {
+    if (tokens[pos].t === '(') {
+      const [sub, next] = parseBSList(tokens, pos);
+      items.push(sub);
+      pos = next;
+    } else {
+      items.push(tokens[pos].v ?? null);
+      pos++;
+    }
+  }
+  pos++; // consume ')'
+  return [items, pos];
+}
+
+function pairsToMap(arr) {
+  const m = {};
+  if (!Array.isArray(arr)) return m;
+  for (let i = 0; i + 1 < arr.length; i += 2) {
+    if (arr[i] != null) m[String(arr[i]).toLowerCase()] = arr[i + 1] ?? '';
+  }
+  return m;
+}
+
+function walkBS(node, partNum) {
+  // Multipart: first element is an array (a nested body part)
+  if (Array.isArray(node[0])) {
+    const results = [];
+    let childIdx = 1;
+    for (let i = 0; i < node.length; i++) {
+      if (!Array.isArray(node[i])) break;
+      const childNum = partNum ? `${partNum}.${childIdx}` : String(childIdx);
+      results.push(...walkBS(node[i], childNum));
+      childIdx++;
+    }
+    return results;
+  }
+
+  // Leaf part
+  const type    = (node[0] || 'application').toLowerCase();
+  const subtype = (node[1] || 'octet-stream').toLowerCase();
+  const params  = pairsToMap(node[2]);
+  const encoding = (node[5] || '7bit').toLowerCase();
+  const size    = parseInt(node[6]) || 0;
+
+  // Disposition is node[8]: either null/string or ["attachment", ["filename","foo"]]
+  let disp = null;
+  let filename = null;
+  const dispNode = node[8];
+  if (Array.isArray(dispNode)) {
+    disp = (dispNode[0] || '').toLowerCase();
+    const dispParams = pairsToMap(dispNode[1]);
+    filename = dispParams['filename'] || dispParams['filename*'] || null;
+  }
+
+  // Fall back to name in content-type params
+  if (!filename) filename = params['name'] || params['name*'] || null;
+
+  // Decode RFC 2047 encoded-word filenames
+  if (filename) filename = decodeWords(filename);
+
+  return [{ partNum: partNum || '1', type, subtype, encoding, size, filename, disp }];
+}
+
+export function parseBodyStructure(rawFetchResponse) {
+  // Extract the BODYSTRUCTURE (...) section from the raw IMAP response
+  const m = rawFetchResponse.match(/BODYSTRUCTURE\s+(\([\s\S]*)/i);
+  if (!m) return [];
+  const tokens = tokenizeBS(m[1]);
+  if (!tokens.length || tokens[0].t !== '(') return [];
+  const [tree] = parseBSList(tokens, 0);
+  return walkBS(tree, '');
+}
+
+// ---------------------------------------------------------------------------
+// Raw body decoder (returns Uint8Array — for attachment download)
+// ---------------------------------------------------------------------------
+// Unlike decodeBody() which returns a decoded string for display, this returns
+// raw bytes so the caller can re-encode as base64 for transport.
+
+export function decodeBodyRaw(body, cte) {
+  const encoding = (cte || '7bit').toLowerCase().trim();
+  if (encoding === 'base64') {
+    return Uint8Array.from(atob(body.replace(/\s/g, '')), c => c.charCodeAt(0));
+  }
+  if (encoding === 'quoted-printable') {
+    const s = body
+      .replace(/=\r?\n/g, '')
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    return Uint8Array.from(s, c => c.charCodeAt(0));
+  }
+  // 7bit / 8bit — treat as latin-1 bytes
+  return Uint8Array.from(body, c => c.charCodeAt(0));
+}
