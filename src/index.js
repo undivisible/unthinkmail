@@ -1,3 +1,4 @@
+import { Hono } from 'hono';
 import { ImapSession } from './session.js';
 import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
@@ -26,32 +27,25 @@ export function jsonError(message, status = 500) {
   });
 }
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+const app = new Hono();
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS });
-    }
+app.options('*', (c) => new Response(null, { status: 204, headers: CORS }));
 
-    try {
-      if (url.pathname === '/' && request.method === 'GET') {
-        return new Response(HUB, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
-      }
-      if (url.pathname === '/health') return json({ status: 'ok' });
-      if (url.pathname === '/api/key') return handleKey(request, env);
-      if (url.pathname === '/mcp') return handleMcp(request, env);
-      if (url.pathname === '/.well-known/oauth-authorization-server' ||
-          url.pathname === '/.well-known/oauth-authorization-server/mcp' ||
-          url.pathname === '/.well-known/openid-configuration') return handleOAuthMeta(request, env);
-      if (url.pathname === '/oauth/register') return handleOAuthRegister(request, env);
-      if (url.pathname === '/oauth/authorize') return handleOAuthAuthorize(request, env);
-      if (url.pathname === '/oauth/token') return handleOAuthToken(request, env);
+app.get('/',       (c) => c.html(HUB));
+app.get('/health', (c) => c.json({ status: 'ok' }));
 
-      return jsonError('Not found', 404);
-    } catch (e) {
-      console.error('Unhandled error:', e);
-      return jsonError('Internal server error', 500);
-    }
-  },
-};
+app.post('/api/key', (c) => handleKey(c.req.raw, c.env));
+
+app.get('/mcp',  (c) => handleMcp(c.req.raw, c.env));
+app.post('/mcp', (c) => handleMcp(c.req.raw, c.env));
+
+app.get('/.well-known/oauth-authorization-server',     (c) => handleOAuthMeta(c.req.raw, c.env));
+app.get('/.well-known/oauth-authorization-server/mcp', (c) => handleOAuthMeta(c.req.raw, c.env));
+app.get('/.well-known/openid-configuration',           (c) => handleOAuthMeta(c.req.raw, c.env));
+
+app.post('/oauth/register',  (c) => handleOAuthRegister(c.req.raw, c.env));
+app.get('/oauth/authorize',  (c) => handleOAuthAuthorize(c.req.raw, c.env));
+app.post('/oauth/authorize', (c) => handleOAuthAuthorize(c.req.raw, c.env));
+app.post('/oauth/token',     (c) => handleOAuthToken(c.req.raw, c.env));
+
+export default app;
