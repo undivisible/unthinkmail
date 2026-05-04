@@ -111,7 +111,7 @@ export async function handleOAuthAuthorize(request, env) {
     const p = Object.fromEntries(url.searchParams);
     console.log('[oauth] authorize GET client_id_prefix=%s redirect_uri=%s has_challenge=%s',
       p.client_id?.slice(0, 12), p.redirect_uri, !!p.code_challenge);
-    return new Response(oauthForm(p, null), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+    return new Response(oauthForm(p, null), { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
   }
 
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -159,7 +159,7 @@ export async function handleOAuthAuthorize(request, env) {
 
   if (!imapHost || !imapUser || !imapPass) {
     return new Response(oauthForm(oauthParams, 'imap host, username, and password are required'), {
-      headers: { 'Content-Type': 'text/html;charset=utf-8' },
+      headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
     });
   }
 
@@ -175,7 +175,7 @@ export async function handleOAuthAuthorize(request, env) {
     smtp_reply_to: smtpReplyTo,
     smtp_signature: smtpSignature,
   };
-  const umKey = await encodeKey(creds);
+  const umKey = await encodeKey(creds, oauthSecret);
 
   const payloadJson = JSON.stringify({
     k: umKey,

@@ -26,6 +26,6 @@ export async function handleKey(request, env) {
     smtp_signature: smtp_signature?.trim() || null,
   };
 
-  const key = await encodeKey(creds);
+  const key = await encodeKey(creds, env?.OAUTH_SECRET);
   return json({ key });
 }

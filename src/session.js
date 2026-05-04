@@ -16,11 +16,28 @@ function toImapDate(s) {
 
 // Escape a value for use in an IMAP quoted string
 const imapStr = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, '')}"`;
+const headerStr = (s) => String(s ?? '').replace(/[\r\n]/g, '').trim();
+const headerList = (value) => Array.isArray(value)
+  ? value.map(headerStr).filter(Boolean).join(', ')
+  : String(value ?? '').split(',').map(headerStr).filter(Boolean).join(', ');
+
+function validateSearchQuery(query) {
+  const s = String(query);
+  if (/[\r\n]/.test(s)) throw new Error('Raw IMAP query must not contain newlines');
+  return s.trim() || 'ALL';
+}
+
+function validateKeyword(label) {
+  const s = String(label ?? '').trim();
+  if (!s || s.length > 64) throw new Error('Invalid label');
+  if (/[\x00-\x20(){%*"\\\]\[]/.test(s)) throw new Error('Invalid label');
+  return s;
+}
 
 // Build an IMAP SEARCH criteria string from structured args
 // Falls back to raw `query` if provided (for advanced use)
 function buildSearchQuery(args) {
-  if (args.query) return args.query;
+  if (args.query) return validateSearchQuery(args.query);
   const parts = [];
   if (args.unseen) parts.push('UNSEEN');
   if (args.from) parts.push(`FROM ${imapStr(args.from)}`);
@@ -52,7 +69,10 @@ function buildUidSequence(uids) {
 // Convert Uint8Array to base64 without hitting V8's call stack argument limit
 function uint8ToBase64(bytes) {
   let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    s += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
   return btoa(s);
 }
 
@@ -91,19 +111,20 @@ function parseAddresses(header) {
 
 // Compose a minimal RFC 2822 message string suitable for APPEND or SMTP
 function buildRawMessage({ from, to, subject, body, cc, replyTo, inReplyTo, references, date, messageId }) {
-  const msgDate   = date       || new Date().toUTCString();
-  const msgId     = messageId  || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
-  const toStr     = Array.isArray(to) ? to.join(', ') : (to || '');
+  const msgDate   = headerStr(date) || new Date().toUTCString();
+  const msgId     = headerStr(messageId) || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
+  const toStr     = headerList(to);
+  const ccStr     = cc ? headerList(cc) : '';
   const lines = [
-    `From: ${from}`,
+    `From: ${headerStr(from)}`,
     `To: ${toStr}`,
-    cc        ? `Cc: ${Array.isArray(cc) ? cc.join(', ') : cc}` : null,
-    replyTo   ? `Reply-To: ${replyTo}`   : null,
-    `Subject: ${subject || '(no subject)'}`,
+    ccStr     ? `Cc: ${ccStr}` : null,
+    replyTo   ? `Reply-To: ${headerStr(replyTo)}`   : null,
+    `Subject: ${headerStr(subject) || '(no subject)'}`,
     `Date: ${msgDate}`,
     `Message-ID: ${msgId}`,
-    inReplyTo  ? `In-Reply-To: ${inReplyTo}`  : null,
-    references ? `References: ${references}`  : null,
+    inReplyTo  ? `In-Reply-To: ${headerStr(inReplyTo)}`  : null,
+    references ? `References: ${headerStr(references)}`  : null,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
     'Content-Transfer-Encoding: 8bit',
@@ -845,12 +866,16 @@ export class ImapSession {
       } else if (name === 'addlabel') {
         if (!args.uid)   return err(-32602, 'Missing uid');
         if (!args.label) return err(-32602, 'Missing label');
-        result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '+FLAGS', [args.label]);
+        let label;
+        try { label = validateKeyword(args.label); } catch (e) { return err(-32602, e.message); }
+        result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '+FLAGS', [label]);
 
       } else if (name === 'removelabel') {
         if (!args.uid)   return err(-32602, 'Missing uid');
         if (!args.label) return err(-32602, 'Missing label');
-        result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '-FLAGS', [args.label]);
+        let label;
+        try { label = validateKeyword(args.label); } catch (e) { return err(-32602, e.message); }
+        result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '-FLAGS', [label]);
 
       } else if (name === 'extractcontacts') {
         const folder   = args.folder ?? 'INBOX';

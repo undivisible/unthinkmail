@@ -11,6 +11,8 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
 };
 
 export function json(data, status = 200) {

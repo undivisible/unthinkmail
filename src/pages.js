@@ -233,7 +233,7 @@ export const HUB = `<!DOCTYPE html>
   <div class="mb-8">
     <h1 class="text-white font-light text-2xl mb-1">unthinkmail</h1>
     <p class="text-sub text-xs">give your ai access to your email inbox via mcp</p>
-    <p class="text-dim text-xs mt-2 leading-relaxed max-w-sm">enter your imap credentials to get an encrypted api key. same credentials always produce the same key. nothing is stored.</p>
+    <p class="text-dim text-xs mt-2 leading-relaxed max-w-sm">enter your imap credentials to get an encrypted api key. nothing is stored.</p>
   </div>
 
   <!-- Provider presets -->
@@ -359,7 +359,7 @@ export const HUB = `<!DOCTYPE html>
         </div>
       </div>
 
-      <p class="text-xs text-dim">same credentials always produce the same key. re-enter them here any time to recover it.</p>
+      <p class="text-xs text-dim">new keys are encrypted with a server secret when configured. revoke access by disabling the app password at your provider.</p>
     </div>
   </div>
 

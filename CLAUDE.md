@@ -25,11 +25,11 @@ Package manager: **Bun only** (never npm/yarn/pnpm).
 
 ### Key system (`src/lib/crypto.js`)
 
-`um_` keys are **base64url(JSON credentials)** — no server-side storage, no master key. Same credentials always produce the same key (deterministic). To revoke, disable the app password at the email provider.
+New keys are **AES-GCM encrypted credential tokens** when `OAUTH_SECRET` is configured. Legacy `um_` base64url(JSON credentials) keys are still accepted for compatibility. There is no server-side credential storage; to revoke, disable the app password at the email provider.
 
 ```js
-encodeKey(creds)   // → 'um_...'
-decodeKey(token)   // → credentials object
+encodeKey(creds, secret?)   // → 'um2_...' with secret, legacy 'um_...' without
+decodeKey(token, secret?)   // → credentials object
 credHash(creds)    // → SHA-256 hex (stable Durable Object ID)
 ```
 
@@ -46,7 +46,7 @@ Endpoints:
 | `/oauth/authorize` | POST | Validate creds → signed auth code → redirect |
 | `/oauth/token` | POST | PKCE-verify code → return `um_` key as access_token |
 
-Auth codes are HMAC-signed self-contained tokens (no KV needed). `OAUTH_SECRET` is a static signing key set in `wrangler.jsonc` vars.
+Auth codes are HMAC-signed self-contained tokens (no KV needed). `OAUTH_SECRET` is a static signing key set via Wrangler secrets and is also used to encrypt new access tokens.
 
 Client IDs are deterministic (base64url of sorted redirect_uris) — no client registration storage needed.
 

@@ -15,23 +15,22 @@ const envelopeAddr = (s) => {
 // Sanitize a header value — strip CRLF to prevent header injection
 const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
 
+const parseRecipients = (value) => {
+  const raw = Array.isArray(value) ? value : String(value ?? '').split(',');
+  return raw.map(sanitizeHeader).filter(Boolean);
+};
+
+const b64utf8 = (s) => btoa(String.fromCharCode(...enc.encode(String(s))));
+
 export class SmtpClient {
   async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {}, replyTo, signature }, creds) {
     // Append signature to body if configured
     const sig = signature || creds?.smtp_signature;
     const signedBody = sig ? `${body}\r\n\r\n${sig}` : body;
     from    = sanitizeHeader(from);
-    // Allow to be string (comma-separated), array, or single address
-    let toList;
-    if (Array.isArray(to)) {
-      toList = to.map(sanitizeHeader);
-    } else if (String(to).includes(',')) {
-      toList = to.split(',').map(sanitizeHeader);
-    } else {
-      toList = [sanitizeHeader(to)];
-    }
+    const toList = parseRecipients(to);
+    const ccList = cc ? parseRecipients(cc) : [];
     subject = sanitizeHeader(subject);
-    if (cc) cc = Array.isArray(cc) ? cc.map(sanitizeHeader) : sanitizeHeader(cc);
 
     // Override from address if custom SMTP sender configured
     let fromAddr = from;
@@ -110,9 +109,9 @@ export class SmtpClient {
 
       await write('AUTH LOGIN\r\n');
       await readResp(); // 334 Username:
-      await write(btoa(user) + '\r\n');
+      await write(b64utf8(user) + '\r\n');
       await readResp(); // 334 Password:
-      await write(btoa(pass) + '\r\n');
+      await write(b64utf8(pass) + '\r\n');
       const authResp = await readResp();
       if (!authResp.startsWith('235')) throw new Error('Auth failed: ' + authResp);
 
@@ -120,7 +119,7 @@ export class SmtpClient {
       const fromResp = await readResp();
       if (!fromResp.startsWith('250')) throw new Error('MAIL FROM failed: ' + fromResp);
 
-      const recipients = [...toList, ...(Array.isArray(cc) ? cc : cc ? [cc] : [])].filter(Boolean);
+      const recipients = [...toList, ...ccList];
       for (const r of recipients) {
         await write(`RCPT TO:<${envelopeAddr(r)}>\r\n`);
         const rcptResp = await readResp();
@@ -131,8 +130,8 @@ export class SmtpClient {
       const dataResp = await readResp();
       if (!dataResp.startsWith('354')) throw new Error('DATA failed: ' + dataResp);
 
-      const toHeader = Array.isArray(to) ? to.join(', ') : to;
-      const ccHeader = toList.length > 1 && recipients.length > toList.length ? `Cc: ${recipients.slice(toList.length).join(', ')}\r\n` : '';
+      const toHeader = toList.join(', ');
+      const ccHeader = ccList.length ? `Cc: ${ccList.join(', ')}\r\n` : '';
 
       // Build extra headers (e.g. In-Reply-To, References)
       const extraLines = Object.entries(extraHeaders)

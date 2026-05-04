@@ -7,6 +7,8 @@ const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
 };
 
 const WWW_AUTH = 'Bearer realm="unthinkmail", error="unauthorized"';
@@ -24,7 +26,7 @@ export async function handleMcp(request, env) {
 
   let credentials;
   try {
-    credentials = await decodeKey(auth.slice(7));
+    credentials = await decodeKey(auth.slice(7), env?.OAUTH_SECRET);
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid API key' }), {
       status: 401,

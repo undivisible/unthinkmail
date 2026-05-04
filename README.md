@@ -13,7 +13,7 @@ unthinkmail connects to your existing email account over IMAP and exposes it as 
 3. Point your AI client at `https://unthinkmail.undivisible.dev/mcp` with `Authorization: Bearer <your key>`
 4. Your AI can now search, read, move, and delete mail
 
-The key *is* your credentials — base64url-encoded with a SHA-256 hash. Nothing is stored. The same credentials always produce the same key, so you can regenerate it any time.
+The key contains your credentials so the server can connect to your mailbox without storing anything. When `OAUTH_SECRET` is configured, new keys are encrypted with AES-GCM; legacy base64url `um_` keys are still accepted for compatibility.
 
 ## Tools exposed
 
@@ -74,7 +74,7 @@ bun run dev
 
 ## Security
 
-- Credentials are base64url-encoded into the access token — no storage, no master key
+- Credentials are carried in the access token so there is no server-side credential storage. Configure `OAUTH_SECRET` so new tokens are encrypted at rest.
 - Each credential set gets its own Durable Object instance
 - IMAP/SMTP connections use native TLS via cloudflare:sockets
 - Use an **app-specific password** if your provider supports it (Gmail, Outlook, Fastmail all do). To revoke access, disable the app password at your provider.

@@ -264,7 +264,7 @@ export class ImapClient {
     const uidSeq = uids.map(u => validateUid(u)).join(',');
 
     const tag = this.#tag();
-    await this.#write(`${tag} UID FETCH ${uidSeq} (UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID)])\r\n`);
+    await this.#write(`${tag} UID FETCH ${uidSeq} (UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID)])\r\n`);
 
     const messages = [];
     let current = null;
