@@ -84,6 +84,17 @@ export async function handleOAuthMeta(request) {
   });
 }
 
+export async function handleProtectedResourceMeta(request) {
+  const o = new URL(request.url).origin;
+  return json({
+    resource: `${o}/mcp`,
+    authorization_servers: [o],
+    scopes_supported: ['email'],
+    bearer_methods_supported: ['header'],
+    resource_name: 'unthinkmail',
+  });
+}
+
 // POST /oauth/register — RFC 7591 dynamic client registration
 // client_id is deterministic (base64url of sorted redirect_uris) — no storage needed.
 export async function handleOAuthRegister(request) {

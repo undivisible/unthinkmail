@@ -11,7 +11,10 @@ const CORS = {
   'X-Content-Type-Options': 'nosniff',
 };
 
-const WWW_AUTH = 'Bearer realm="unthinkmail", error="unauthorized"';
+const wwwAuth = (request, error = 'unauthorized') => {
+  const o = new URL(request.url).origin;
+  return `Bearer realm="unthinkmail", resource_metadata="${o}/.well-known/oauth-protected-resource/mcp", scope="email", error="${error}"`;
+};
 
 export async function handleMcp(request, env) {
   if (request.method !== 'GET' && request.method !== 'POST') return jsonError('Method not allowed', 405);
@@ -20,7 +23,7 @@ export async function handleMcp(request, env) {
   if (!auth.startsWith('Bearer ')) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': WWW_AUTH, ...CORS },
+      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': wwwAuth(request), ...CORS },
     });
   }
 
@@ -30,7 +33,7 @@ export async function handleMcp(request, env) {
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid API key' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': `Bearer realm="unthinkmail", error="invalid_token"`, ...CORS },
+      headers: { 'Content-Type': 'application/json', 'WWW-Authenticate': wwwAuth(request, 'invalid_token'), ...CORS },
     });
   }
 

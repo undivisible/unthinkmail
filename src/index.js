@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { ImapSession } from './session.js';
 import { handleKey } from './routes/key.js';
 import { handleMcp } from './routes/mcp.js';
-import { handleOAuthMeta, handleOAuthRegister, handleOAuthAuthorize, handleOAuthToken } from './routes/oauth.js';
+import { handleOAuthMeta, handleOAuthRegister, handleOAuthAuthorize, handleOAuthToken, handleProtectedResourceMeta } from './routes/oauth.js';
 import { HUB } from './pages.js';
 
 export { ImapSession };
@@ -44,6 +44,8 @@ app.post('/mcp', (c) => handleMcp(c.req.raw, c.env));
 app.get('/.well-known/oauth-authorization-server',     (c) => handleOAuthMeta(c.req.raw, c.env));
 app.get('/.well-known/oauth-authorization-server/mcp', (c) => handleOAuthMeta(c.req.raw, c.env));
 app.get('/.well-known/openid-configuration',           (c) => handleOAuthMeta(c.req.raw, c.env));
+app.get('/.well-known/oauth-protected-resource',       (c) => handleProtectedResourceMeta(c.req.raw, c.env));
+app.get('/.well-known/oauth-protected-resource/mcp',   (c) => handleProtectedResourceMeta(c.req.raw, c.env));
 
 app.post('/oauth/register',  (c) => handleOAuthRegister(c.req.raw, c.env));
 app.get('/oauth/authorize',  (c) => handleOAuthAuthorize(c.req.raw, c.env));
