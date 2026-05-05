@@ -5,6 +5,8 @@
 import { ImapClient } from './imap.js';
 import { SmtpClient } from './smtp.js';
 import { parseBodyStructure, decodeBodyRaw } from './mime.js';
+import { buildMimeMessage, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TOTAL_ATTACHMENT_BYTES } from './outbound-mime.js';
+import { fetchUrlAttachments } from './url-attachments.js';
 
 // IMAP date format: DD-Mon-YYYY (e.g. 1-Jan-2024)
 const IMAP_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -91,6 +93,31 @@ function parseHeaderBlock(raw) {
   return map;
 }
 
+function splitHeaderBody(raw) {
+  let pos = raw.indexOf('\r\n\r\n');
+  if (pos >= 0) return [raw.slice(0, pos), raw.slice(pos + 4)];
+  pos = raw.indexOf('\n\n');
+  if (pos >= 0) return [raw.slice(0, pos), raw.slice(pos + 2)];
+  return [raw, ''];
+}
+
+function stripHeader(raw, name) {
+  const [headerRaw, body] = splitHeaderBody(raw);
+  const lines = headerRaw.split(/\r?\n/);
+  const kept = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (/^[ \t]/.test(line)) {
+      if (!skipping) kept.push(line);
+      continue;
+    }
+    const colon = line.indexOf(':');
+    skipping = colon > 0 && line.slice(0, colon).trim().toLowerCase() === name.toLowerCase();
+    if (!skipping) kept.push(line);
+  }
+  return kept.join('\r\n') + '\r\n\r\n' + body;
+}
+
 // Extract email addresses from a header value like "Name <a@b.com>, c@d.com"
 function parseAddresses(header) {
   if (!header) return [];
@@ -110,11 +137,29 @@ function parseAddresses(header) {
 }
 
 // Compose a minimal RFC 2822 message string suitable for APPEND or SMTP
-function buildRawMessage({ from, to, subject, body, cc, replyTo, inReplyTo, references, date, messageId }) {
+function buildRawMessage({ from, to, subject, body, htmlBody, cc, replyTo, inReplyTo, references, date, messageId, attachments }) {
   const msgDate   = headerStr(date) || new Date().toUTCString();
   const msgId     = headerStr(messageId) || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
   const toStr     = headerList(to);
   const ccStr     = cc ? headerList(cc) : '';
+  if (htmlBody != null || (Array.isArray(attachments) && attachments.length)) {
+    return buildMimeMessage({
+      from,
+      to,
+      subject: headerStr(subject) || '(no subject)',
+      body: body || '',
+      htmlBody,
+      cc,
+      replyTo,
+      attachments,
+      extraHeaders: {
+        Date: msgDate,
+        'Message-ID': msgId,
+        ...(inReplyTo ? { 'In-Reply-To': inReplyTo } : {}),
+        ...(references ? { References: references } : {}),
+      },
+    });
+  }
   const lines = [
     `From: ${headerStr(from)}`,
     `To: ${toStr}`,
@@ -133,6 +178,82 @@ function buildRawMessage({ from, to, subject, body, cc, replyTo, inReplyTo, refe
   ].filter(l => l !== null);
   return lines.join('\r\n');
 }
+
+const ATTACHMENT_SCHEMA = {
+  type: 'object',
+  properties: {
+    filename: { type: 'string', description: 'ASCII filename. Convert non-ASCII filenames to ASCII because outbound MIME filename encoding is not emitted yet and some mail clients show encoded filenames poorly.' },
+    mimeType: { type: 'string' },
+    content:  { type: 'string', description: 'Base64-encoded file content' },
+    contentBase64: { type: 'string', description: 'Base64-encoded file content' },
+    contentDataUrl: { type: 'string', description: 'data: URL with base64 content' },
+    contentText: { type: 'string', description: 'Raw text content; server UTF-8 encodes it' },
+    contentBytes: { type: 'array', items: { type: 'integer', minimum: 0, maximum: 255 }, description: 'Raw bytes as integers 0-255; server base64 encodes them' },
+    contentId: { type: 'string', description: 'Content-ID for inline use, referenced in HTML as cid:contentId' },
+    inline: { type: 'boolean', description: 'Set true for inline images referenced by htmlBody' },
+  },
+  required: ['filename'],
+  anyOf: [
+    { required: ['content'] },
+    { required: ['contentBase64'] },
+    { required: ['contentDataUrl'] },
+    { required: ['contentText'] },
+    { required: ['contentBytes'] },
+  ],
+};
+
+const sizeMb = (bytes) => bytes / (1024 * 1024);
+const LOCAL_ATTACHMENT_GUIDANCE = 'Local file guidance for Claude: this hosted server cannot read local paths. Do not paste large base64 directly into chat if it would waste tokens. If a user wants to send a local file, either ask for/upload a public HTTPS URL and use sendemailfromurls, or generate a small local script that reads the file, base64-encodes it, and POSTs a tools/call request to this MCP endpoint with Authorization: Bearer <key>. The script should send attachments with filename, mimeType, and contentBase64.';
+const ATTACHMENT_LIMITS = `Optional attachments. Maximum ${MAX_ATTACHMENTS} attachments per email, ${sizeMb(MAX_ATTACHMENT_BYTES)} MB each, ${sizeMb(MAX_TOTAL_ATTACHMENT_BYTES)} MB total. Each item must include an ASCII filename plus one content field: content/contentBase64, contentDataUrl, contentText, or contentBytes. mimeType is optional. ${LOCAL_ATTACHMENT_GUIDANCE}`;
+
+const ATTACHMENTS_SCHEMA = {
+  type: 'array',
+  description: ATTACHMENT_LIMITS,
+  minItems: 1,
+  items: ATTACHMENT_SCHEMA,
+};
+
+const HOSTED_ATTACHMENT_GUIDANCE = `Hosted attachment guidance for Claude: if user gives hosted files, use attachmentUrls or the sendemailfromurls tool. Do not paste raw base64 when a public HTTPS URL exists. Example: {"to":"person@example.com","subject":"Report","body":"Attached.","attachmentUrls":[{"url":"https://example.com/report.pdf","filename":"report.pdf","mimeType":"application/pdf"}]}. Inline image example: htmlBody '<img src="cid:logo">' plus attachmentUrls [{"url":"https://example.com/logo.png","filename":"logo.png","mimeType":"image/png","contentId":"logo","inline":true}]. URLs must be HTTPS and publicly fetchable by this server. Limits: ${MAX_ATTACHMENTS} attachments, ${sizeMb(MAX_ATTACHMENT_BYTES)} MB each, ${sizeMb(MAX_TOTAL_ATTACHMENT_BYTES)} MB total.`;
+
+const URL_ATTACHMENT_SCHEMA = {
+  type: 'object',
+  properties: {
+    url: { type: 'string', description: 'Public HTTPS URL for the attachment content' },
+    filename: { type: 'string', description: 'Optional ASCII filename override. Defaults from Content-Disposition or URL path.' },
+    mimeType: { type: 'string', description: 'Optional MIME type override. Defaults from Content-Type header.' },
+    contentId: { type: 'string', description: 'Content-ID for inline use, referenced in HTML as cid:contentId' },
+    inline: { type: 'boolean', description: 'Set true for inline images referenced by htmlBody' },
+  },
+  required: ['url'],
+};
+
+const URL_ATTACHMENTS_SCHEMA = {
+  type: 'array',
+  description: HOSTED_ATTACHMENT_GUIDANCE,
+  minItems: 1,
+  items: {
+    anyOf: [
+      { type: 'string' },
+      URL_ATTACHMENT_SCHEMA,
+    ],
+  },
+};
+
+const RECIPIENTS_SCHEMA = {
+  anyOf: [
+    { type: 'string' },
+    { type: 'array', items: { type: 'string' } },
+  ],
+  description: 'Email recipient(s): single address, comma-separated addresses, or an array of addresses.',
+};
+
+const hasMessageContent = (args) =>
+  String(args.body ?? '').length > 0 ||
+  String(args.htmlBody ?? '').length > 0 ||
+  (Array.isArray(args.attachments) && args.attachments.length > 0) ||
+  (Array.isArray(args.attachmentUrls) && args.attachmentUrls.length > 0);
+
+const MESSAGE_CONTENT_ANY_OF = [{ required: ['body'] }, { required: ['htmlBody'] }, { required: ['attachments'] }, { required: ['attachmentUrls'] }];
 
 const TOOLS = [
   {
@@ -196,16 +317,37 @@ const TOOLS = [
 },
   {
     name: 'sendemail',
-    description: 'Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address.',
+    description: `Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address. ${HOSTED_ATTACHMENT_GUIDANCE} ${LOCAL_ATTACHMENT_GUIDANCE}`,
     inputSchema: {
       type: 'object',
       properties: {
-        to:      { type: 'string', description: 'Recipient email(s): "alice@example.com", "alice@example.com,bob@example.com", or ["alice@example.com","bob@example.com"]' },
+        to:      RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Email subject line' },
-        body:    { type: 'string', description: 'Plain text email body' },
-        cc:      { type: 'string', description: 'Optional CC: same formats as "to"' },
+        body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
+        htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching attachment contentId with inline true.' },
+        cc:      RECIPIENTS_SCHEMA,
+        attachments: ATTACHMENTS_SCHEMA,
+        attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
-      required: ['to', 'subject', 'body'],
+      required: ['to', 'subject'],
+      anyOf: MESSAGE_CONTENT_ANY_OF,
+    },
+  },
+  {
+    name: 'sendemailfromurls',
+    description: `Compose and send a new email via SMTP with attachments fetched from public HTTPS URLs. Prefer this when files are hosted. The server downloads and encodes attachments; Claude should provide URLs, not raw base64. ${HOSTED_ATTACHMENT_GUIDANCE} ${LOCAL_ATTACHMENT_GUIDANCE}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        to:      RECIPIENTS_SCHEMA,
+        subject: { type: 'string', description: 'Email subject line' },
+        body:    { type: 'string', description: 'Plain text email body. Required unless htmlBody is provided.' },
+        htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching URL attachment contentId with inline true.' },
+        cc:      RECIPIENTS_SCHEMA,
+        attachmentUrls: URL_ATTACHMENTS_SCHEMA,
+      },
+      required: ['to', 'subject', 'attachmentUrls'],
+      anyOf: [{ required: ['body'] }, { required: ['htmlBody'] }, { required: ['attachmentUrls'] }],
     },
   },
   {
@@ -220,12 +362,16 @@ const TOOLS = [
           items: {
             type: 'object',
             properties: {
-              to:      { type: 'string' },
+              to:      RECIPIENTS_SCHEMA,
               subject: { type: 'string' },
-              body:    { type: 'string' },
-              cc:      { type: 'string' },
+              body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
+              htmlBody: { type: 'string', description: 'Optional HTML email body' },
+              cc:      RECIPIENTS_SCHEMA,
+              attachments: ATTACHMENTS_SCHEMA,
+              attachmentUrls: URL_ATTACHMENTS_SCHEMA,
             },
-            required: ['to', 'subject', 'body'],
+            required: ['to', 'subject'],
+            anyOf: MESSAGE_CONTENT_ANY_OF,
           },
         },
       },
@@ -240,9 +386,13 @@ const TOOLS = [
       properties: {
         folder: { type: 'string', description: 'Folder containing the original message (default: INBOX)' },
         uid:    { type: 'string', description: 'UID of the message to reply to' },
-        body:   { type: 'string', description: 'Plain text reply body' },
+        body:   { type: 'string', description: 'Plain text reply body. Required unless attachments are provided.' },
+        htmlBody: { type: 'string', description: 'Optional HTML reply body' },
+        attachments: ATTACHMENTS_SCHEMA,
+        attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
-      required: ['uid', 'body'],
+      required: ['uid'],
+      anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
   {
@@ -266,8 +416,11 @@ const TOOLS = [
       properties: {
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
         uid:    { type: 'string', description: 'UID of the message to forward' },
-        to:     { type: 'string', description: 'Recipient(s) — same format as sendemail' },
+        to:     RECIPIENTS_SCHEMA,
         note:   { type: 'string', description: 'Optional note to prepend before the forwarded content' },
+        includeOriginalAttachments: { type: 'boolean', description: 'Forward original attachments too. Defaults to true.' },
+        attachments: ATTACHMENTS_SCHEMA,
+        attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
       required: ['uid', 'to'],
     },
@@ -287,7 +440,7 @@ const TOOLS = [
   },
   {
     name: 'downloadattachment',
-    description: 'Extract a named attachment from a message and return it as base64-encoded content. Maximum 5 MB.',
+    description: 'Extract a named attachment from a message and return it as base64-encoded content. Maximum 10 MB.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -421,22 +574,26 @@ const TOOLS = [
   },
   {
     name: 'savedraft',
-    description: 'Save a message as a draft by appending it to the Drafts folder with the \\Draft flag.',
+    description: 'Save a message as a draft by appending it to the Drafts folder with the \\Draft flag. Preserves HTML and attachments.',
     inputSchema: {
       type: 'object',
       properties: {
-        to:      { type: 'string', description: 'Recipient(s)' },
+        to:      RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Subject line' },
-        body:    { type: 'string', description: 'Plain text body' },
-        cc:      { type: 'string', description: 'CC recipients (optional)' },
+        body:    { type: 'string', description: 'Plain text body. Required unless htmlBody or attachments are provided.' },
+        htmlBody: { type: 'string', description: 'Optional HTML email body' },
+        cc:      RECIPIENTS_SCHEMA,
+        attachments: ATTACHMENTS_SCHEMA,
+        attachmentUrls: URL_ATTACHMENTS_SCHEMA,
         folder:  { type: 'string', description: 'Drafts folder (auto-detected if omitted)' },
       },
-      required: ['to', 'subject', 'body'],
+      required: ['to', 'subject'],
+      anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
   {
     name: 'senddraft',
-    description: 'Send a saved draft: fetches it by UID, sends via SMTP, then deletes the draft.',
+    description: 'Send a saved draft: fetches its raw MIME content by UID, sends via SMTP, then deletes the draft.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -515,6 +672,41 @@ export class ImapSession {
     }
   }
 
+  async #fetchAttachmentsForSending(folder, uid) {
+    const bsRaw = await this.#imap.fetchBodyStructure(folder, uid);
+    const parts = parseBodyStructure(bsRaw).filter(p => p.filename);
+    const attachments = [];
+    let total = 0;
+    for (const part of parts) {
+      const decodedSize = part.encoding === 'base64'
+        ? Math.floor(part.size * 0.75)
+        : part.size;
+      if (decodedSize > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`Original attachment "${part.filename}" exceeds ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`);
+      }
+      total += decodedSize;
+      if (total > MAX_TOTAL_ATTACHMENT_BYTES) {
+        throw new Error(`Original attachments exceed ${MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024)}MB total limit`);
+      }
+      const rawPart = await this.#imap.fetchBodyPart(folder, uid, part.partNum);
+      if (rawPart === null) throw new Error(`Could not fetch original attachment "${part.filename}"`);
+      const bytes = decodeBodyRaw(rawPart, part.encoding);
+      attachments.push({
+        filename: part.filename,
+        mimeType: `${part.type}/${part.subtype}`,
+        contentBase64: uint8ToBase64(bytes),
+      });
+    }
+    return attachments;
+  }
+
+  async #attachmentsFromArgs(args) {
+    return [
+      ...(Array.isArray(args.attachments) ? args.attachments : []),
+      ...await fetchUrlAttachments(args.attachmentUrls),
+    ];
+  }
+
   #smtpParams() {
     const c = this.#credentials;
     return {
@@ -552,15 +744,17 @@ export class ImapSession {
     const args = params?.arguments ?? {};
 
     // --- sendemail (no IMAP needed) ---
-    if (name === 'sendemail') {
+    if (name === 'sendemail' || name === 'sendemailfromurls') {
       if (!args.to)      return err(-32602, 'Missing to');
       if (!args.subject) return err(-32602, 'Missing subject');
-      if (!args.body)    return err(-32602, 'Missing body');
+      if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
+      if (name === 'sendemailfromurls' && (!Array.isArray(args.attachmentUrls) || args.attachmentUrls.length === 0)) return err(-32602, 'Missing attachmentUrls');
       try {
-        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, cc: args.cc }, this.#credentials);
+        const attachments = await this.#attachmentsFromArgs(args);
+        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, attachments }, this.#credentials);
         return toolOk(result);
       } catch (e) {
-        return toolErr('SMTP error: ' + e.message);
+        return toolErr(`${name === 'sendemailfromurls' ? 'Attachment/SMTP' : 'SMTP'} error: ` + e.message);
       }
     }
 
@@ -571,12 +765,13 @@ export class ImapSession {
       if (emails.length > 50) return err(-32602, 'Maximum 50 emails per batch');
       const results = [];
       for (const email of emails) {
-        if (!email.to || !email.subject || !email.body) {
+        if (!email.to || !email.subject || !hasMessageContent(email)) {
           results.push({ to: email.to, ok: false, error: 'Missing required field' });
           continue;
         }
         try {
-          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, cc: email.cc }, this.#credentials);
+          const attachments = await this.#attachmentsFromArgs(email);
+          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, htmlBody: email.htmlBody, cc: email.cc, attachments }, this.#credentials);
           results.push({ to: email.to, ok: true, ...r });
         } catch (e) {
           results.push({ to: email.to, ok: false, error: e.message });
@@ -588,7 +783,7 @@ export class ImapSession {
     // --- replyemail (needs IMAP for headers, then SMTP) ---
     if (name === 'replyemail') {
       if (!args.uid)  return err(-32602, 'Missing uid');
-      if (!args.body) return err(-32602, 'Missing body');
+      if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
       try {
         await this.#ensureConnected();
       } catch (e) {
@@ -604,11 +799,15 @@ export class ImapSession {
         // Build References: chain (prior references + original message-id)
         const refs = [h.references, h.messageId].filter(Boolean).join(' ').trim();
 
+        const attachments = await this.#attachmentsFromArgs(args);
+
         const result = await new SmtpClient().send({
           ...this.#smtpParams(),
           to: replyTo,
           subject: replySubject,
           body: args.body,
+          htmlBody: args.htmlBody,
+          attachments,
           extraHeaders: {
             'In-Reply-To': h.messageId,
             'References':  refs,
@@ -649,12 +848,17 @@ export class ImapSession {
 
         const extraHeaders = {};
         if (original.messageId) extraHeaders['X-Forwarded-Message-Id'] = original.messageId;
+        const originalAttachments = args.includeOriginalAttachments === false
+          ? []
+          : await this.#fetchAttachmentsForSending(folder, args.uid);
+        const attachments = [...originalAttachments, ...await this.#attachmentsFromArgs(args)];
 
         const result = await new SmtpClient().send({
           ...this.#smtpParams(),
           to: args.to,
           subject: fwdSubject,
           body: fwdBody,
+          attachments,
           extraHeaders,
         }, this.#credentials);
         return toolOk(result);
@@ -755,7 +959,7 @@ export class ImapSession {
         if (!args.uid)      return err(-32602, 'Missing uid');
         if (!args.filename) return err(-32602, 'Missing filename');
         const folder = args.folder ?? 'INBOX';
-        const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+        const MAX_BYTES = MAX_ATTACHMENT_BYTES;
 
         const bsRaw = await this.#imap.fetchBodyStructure(folder, args.uid);
         const parts = parseBodyStructure(bsRaw);
@@ -770,7 +974,7 @@ export class ImapSession {
           ? Math.floor(part.size * 0.75)
           : part.size;
         if (decodedSize > MAX_BYTES) {
-          return toolErr(`Attachment too large: ~${Math.round(decodedSize / 1024)}KB exceeds 5MB limit`);
+          return toolErr(`Attachment too large: ~${Math.round(decodedSize / 1024)}KB exceeds ${MAX_BYTES / (1024 * 1024)}MB limit`);
         }
 
         const rawPart = await this.#imap.fetchBodyPart(folder, args.uid, part.partNum);
@@ -902,14 +1106,17 @@ export class ImapSession {
       } else if (name === 'savedraft') {
         if (!args.to)      return err(-32602, 'Missing to');
         if (!args.subject) return err(-32602, 'Missing subject');
-        if (!args.body)    return err(-32602, 'Missing body');
+        if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
         const draftsFolder = args.folder ?? await this.#imap.findDraftsFolder();
+        const attachments = await this.#attachmentsFromArgs(args);
         const rawMsg = buildRawMessage({
           from:    this.#smtpParams().from,
           to:      args.to,
           subject: args.subject,
           body:    args.body,
+          htmlBody: args.htmlBody,
           cc:      args.cc ?? null,
+          attachments,
         });
         result = await this.#imap.appendMessage(draftsFolder, rawMsg, ['\\Draft']);
         result.draftsFolder = draftsFolder;
@@ -917,18 +1124,18 @@ export class ImapSession {
       } else if (name === 'senddraft') {
         if (!args.uid) return err(-32602, 'Missing uid');
         const draftsFolder = args.folder ?? await this.#imap.findDraftsFolder();
-        const draft = await this.#imap.getMessage(draftsFolder, args.uid);
+        const draft = await this.#imap.getRawMessage(draftsFolder, args.uid);
         if (draft.error) return toolErr('Could not fetch draft: ' + draft.error);
-        if (!draft.to) return toolErr('Draft has no To address');
-        const sendResult = await new SmtpClient().send({
+        const [headerRaw] = splitHeaderBody(draft.raw);
+        const h = parseHeaderBlock(headerRaw);
+        if (!h['to']) return toolErr('Draft has no To address');
+        const sendResult = await new SmtpClient().sendRaw({
           ...this.#smtpParams(),
-          to:      draft.to,
-          subject: draft.subject || '',
-          body:    draft.body    || '',
-          cc:      draft.cc      || null,
-          extraHeaders: draft.messageId ? { 'Message-ID': draft.messageId } : {},
+          to: h['to'],
+          cc: h['cc'] || null,
+          bcc: h['bcc'] || null,
+          rawMessage: stripHeader(draft.raw, 'bcc'),
         }, this.#credentials);
-        // Delete the draft after successful send
         await this.#imap.deleteMessage(draftsFolder, args.uid);
         result = { sent: true, ...sendResult, deletedDraft: args.uid };
 

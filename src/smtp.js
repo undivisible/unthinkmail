@@ -2,6 +2,7 @@
 // Supports SMTPS (port 465, TLS-from-start) and STARTTLS (port 587 / any non-465)
 
 import { connect } from 'cloudflare:sockets';
+import { buildMimeMessage, normalizeAttachments } from './outbound-mime.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -23,10 +24,12 @@ const parseRecipients = (value) => {
 const b64utf8 = (s) => btoa(String.fromCharCode(...enc.encode(String(s))));
 
 export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, cc, extraHeaders = {}, replyTo, signature }, creds) {
+  async send({ host, port, user, pass, from, to, subject, body, htmlBody, cc, extraHeaders = {}, replyTo, signature, attachments }, creds) {
+    const normalizedAttachments = normalizeAttachments(attachments);
     // Append signature to body if configured
     const sig = signature || creds?.smtp_signature;
-    const signedBody = sig ? `${body}\r\n\r\n${sig}` : body;
+    const messageBody = String(body ?? '');
+    const signedBody = sig ? `${messageBody}\r\n\r\n${sig}` : messageBody;
     from    = sanitizeHeader(from);
     const toList = parseRecipients(to);
     const ccList = cc ? parseRecipients(cc) : [];
@@ -45,6 +48,41 @@ export class SmtpClient {
 
     const effectiveReplyTo = sanitizeHeader(replyTo || creds?.smtp_reply_to || '');
 
+    const message = buildMimeMessage({
+      from: fromAddr,
+      to: toList,
+      subject,
+      body: signedBody,
+      htmlBody,
+      cc: ccList,
+      extraHeaders,
+      replyTo: effectiveReplyTo,
+      normalizedAttachments,
+    });
+
+    await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList, message });
+    return { sent: true, to: toList.join(', '), subject, attachments: normalizedAttachments.map(({ filename, mimeType, size }) => ({ filename, mimeType, size })) };
+  }
+
+  async sendRaw({ host, port, user, pass, from, to, cc, bcc, rawMessage }, creds) {
+    from = sanitizeHeader(from);
+    let fromAddr = from;
+    if (creds?.smtp_from_email) {
+      if (creds.smtp_from_name) {
+        fromAddr = `${creds.smtp_from_name} <${creds.smtp_from_email}>`;
+      } else {
+        fromAddr = creds.smtp_from_email;
+      }
+      fromAddr = sanitizeHeader(fromAddr);
+    }
+    const toList = parseRecipients(to);
+    const ccList = cc ? parseRecipients(cc) : [];
+    const bccList = bcc ? parseRecipients(bcc) : [];
+    await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList: [...ccList, ...bccList], message: rawMessage });
+    return { sent: true, to: toList.join(', ') };
+  }
+
+  async #sendMessage({ host, port, user, pass, fromAddr, toList, ccList, message }) {
     const isSmtps = port === 465;
     const socket = connect({ hostname: host, port }, { secureTransport: isSmtps ? 'on' : 'starttls' });
     // Use a state object so write/readLine closures see upgrades after STARTTLS
@@ -130,34 +168,17 @@ export class SmtpClient {
       const dataResp = await readResp();
       if (!dataResp.startsWith('354')) throw new Error('DATA failed: ' + dataResp);
 
-      const toHeader = toList.join(', ');
-      const ccHeader = ccList.length ? `Cc: ${ccList.join(', ')}\r\n` : '';
-
-      // Build extra headers (e.g. In-Reply-To, References)
-      const extraLines = Object.entries(extraHeaders)
-        .filter(([, v]) => v)
-        .map(([k, v]) => `${k}: ${sanitizeHeader(v)}\r\n`)
-        .join('');
-
-      const replyToHeader = effectiveReplyTo ? `Reply-To: ${effectiveReplyTo}\r\n` : '';
-
       // Dot-stuff lines starting with "." per RFC 5321
-      const stuffed = signedBody
+      const stuffed = String(message)
         .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
         .split('\n').map(l => l.startsWith('.') ? '.' + l : l).join('\r\n');
 
-      await write(
-        `From: ${fromAddr}\r\nTo: ${toHeader}\r\n${ccHeader}` +
-        `Subject: ${subject}\r\n${replyToHeader}${extraLines}` +
-        `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
-        `${stuffed}\r\n.\r\n`
-      );
+      await write(`${stuffed}\r\n.\r\n`);
 
       const sentResp = await readResp();
       if (!sentResp.startsWith('250')) throw new Error('Send failed: ' + sentResp);
 
       await write('QUIT\r\n');
-      return { sent: true, to: toHeader, subject };
     } finally {
       try { await state.writer.close(); } catch {}
       try { state.reader.cancel(); } catch {}

@@ -1,0 +1,13 @@
+- [x] Add outgoing attachment support for MCP send/reply/batch/forward tools.
+- [x] Expose attachment size limits in MCP tool schemas so Claude can see them before calling tools.
+- [x] Accept server-side attachment encoding inputs: base64, data URL, raw text, and byte arrays.
+- [x] Add HTML body support with plain-text fallback.
+- [x] Add inline image support through `cid:` references and `contentId`.
+- [x] Preserve attachments and HTML when saving drafts and sending drafts.
+- [x] Forward original message attachments by default.
+- [x] Align incoming `downloadattachment` max size with outgoing per-file limit.
+- [x] Add `sendemailfromurls` and `attachmentUrls` support for hosted files.
+- [ ] Add live SMTP integration tests with a disposable test account or local SMTP harness.
+- [ ] Add Claude MCP end-to-end tests for file inputs once client behavior is pinned down.
+- [ ] Add RFC 2231/RFC 5987 encoded filename output if non-ASCII filename preservation becomes required.
+- [ ] Add TypeScript migration: `tsconfig`, Worker/env types, typed credential model, typed MCP schemas, `.ts` source rename, and `tsc --noEmit` gate.

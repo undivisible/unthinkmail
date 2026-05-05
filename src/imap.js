@@ -90,6 +90,14 @@ export class ImapClient {
     return { uid, ...parsed };
   }
 
+  async getRawMessage(folder, uid) {
+    await this.#selectIfNeeded(folder);
+    const safeUid = validateUid(uid);
+    const raw = await this.#fetchLiteral(safeUid, 'BODY.PEEK[]');
+    if (raw === null) return { uid, error: 'no_literal' };
+    return { uid, raw };
+  }
+
   // Fetch only the headers needed to construct a reply / thread
   async fetchHeaders(folder, uid) {
     await this.#selectIfNeeded(folder);

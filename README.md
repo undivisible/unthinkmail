@@ -25,7 +25,68 @@ The key contains your credentials so the server can connect to your mailbox with
 | `deletemessage` | Permanently delete a message |
 | `movemessage` | Move a message to another folder |
 | `sendemail` | Send a new email |
+| `sendemailfromurls` | Send a new email with attachments fetched from public HTTPS URLs |
 | `replyemail` | Reply to an existing message |
+
+Outgoing tools that send mail accept optional `attachments`: an array of `{ filename, mimeType, content }`, where `content` is base64-encoded file content. They also accept `contentText`, `contentBytes`, or `contentDataUrl` so clients can provide raw text, byte arrays, or data URLs and let the server encode them. When files are hosted, prefer `sendemailfromurls` or `attachmentUrls`; the server fetches public HTTPS URLs and encodes them before sending. Limits are 25 attachments per email, 10 MB per attachment, and 20 MB total. Use ASCII filenames; non-ASCII names are normalized because outbound MIME filename encoding is not emitted yet. HTML email uses `htmlBody`; inline images use `htmlBody` references like `cid:logo` plus an attachment with `contentId: "logo"` and `inline: true`.
+
+Example MCP arguments for hosted files:
+
+```json
+{
+  "to": "person@example.com",
+  "subject": "Report",
+  "body": "Attached.",
+  "attachmentUrls": [
+    {
+      "url": "https://example.com/report.pdf",
+      "filename": "report.pdf",
+      "mimeType": "application/pdf"
+    }
+  ]
+}
+```
+
+Example script:
+
+```bash
+UNTHINKMAIL_KEY="um_..." \
+TO="person@example.com" \
+ATTACHMENT_URL="https://example.com/report.pdf" \
+ATTACHMENT_FILENAME="report.pdf" \
+ATTACHMENT_MIME_TYPE="application/pdf" \
+bun examples/send-hosted-attachment.mjs
+```
+
+For local files, the hosted Worker cannot read local paths. Use a local script so the file bytes stay out of the chat transcript:
+
+```bash
+UNTHINKMAIL_KEY="um_..." \
+TO="person@example.com" \
+ATTACHMENT_FILE="./report.pdf" \
+ATTACHMENT_FILENAME="report.pdf" \
+ATTACHMENT_MIME_TYPE="application/pdf" \
+bun examples/send-local-attachment.mjs
+```
+
+For inline hosted images:
+
+```json
+{
+  "to": "person@example.com",
+  "subject": "Logo",
+  "htmlBody": "<p>Inline logo:</p><img src=\"cid:logo\">",
+  "attachmentUrls": [
+    {
+      "url": "https://example.com/logo.png",
+      "filename": "logo.png",
+      "mimeType": "image/png",
+      "contentId": "logo",
+      "inline": true
+    }
+  ]
+}
+```
 
 Messages are fetched live from your provider on every request — nothing is cached or stored on our side.
 
