@@ -6,6 +6,7 @@ import { ImapClient } from './imap.js';
 import { SmtpClient } from './smtp.js';
 import { parseBodyStructure, decodeBodyRaw } from './mime.js';
 import { buildMimeMessage, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TOTAL_ATTACHMENT_BYTES } from './outbound-mime.js';
+import { buildTemplatedSendMessages } from './send-template.js';
 import { fetchUrlAttachments } from './url-attachments.js';
 
 // IMAP date format: DD-Mon-YYYY (e.g. 1-Jan-2024)
@@ -251,6 +252,23 @@ const RECIPIENTS_SCHEMA = {
   description: 'Email recipient(s): single address, comma-separated addresses, or an array of addresses.',
 };
 
+const TEMPLATED_RECIPIENTS_SCHEMA = {
+  type: 'array',
+  description: 'Personalized recipient entries. Each entry gets its own rendered email. Template variables use {name} syntax in subject, body, and htmlBody.',
+  minItems: 1,
+  maxItems: 50,
+  items: {
+    type: 'object',
+    properties: {
+      to: RECIPIENTS_SCHEMA,
+      cc: RECIPIENTS_SCHEMA,
+      bcc: RECIPIENTS_SCHEMA,
+      variables: { type: 'object', additionalProperties: true, description: 'Values used to replace {variable} placeholders for this recipient.' },
+    },
+    required: ['to'],
+  },
+};
+
 const hasMessageContent = (args) =>
   String(args.body ?? '').length > 0 ||
   String(args.htmlBody ?? '').length > 0 ||
@@ -321,11 +339,12 @@ const TOOLS = [
 },
   {
     name: 'sendemail',
-    description: `Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address. ${HOSTED_ATTACHMENT_GUIDANCE} ${LOCAL_ATTACHMENT_GUIDANCE}`,
+    description: `Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address. For per-recipient personalization, omit to/cc/bcc and pass recipients with variables, then use placeholders like {name} in subject, body, or htmlBody. ${HOSTED_ATTACHMENT_GUIDANCE} ${LOCAL_ATTACHMENT_GUIDANCE}`,
     inputSchema: {
       type: 'object',
       properties: {
         to:      RECIPIENTS_SCHEMA,
+        recipients: TEMPLATED_RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Email subject line' },
         body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching attachment contentId with inline true.' },
@@ -334,7 +353,7 @@ const TOOLS = [
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
-      required: ['to', 'subject'],
+      required: ['subject'],
       anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
@@ -728,12 +747,26 @@ export class ImapSession {
 
     // --- sendemail (no IMAP needed) ---
     if (name === 'sendemail' || name === 'sendemailfromurls') {
-      if (!args.to)      return err(-32602, 'Missing to');
+      const usesTemplatedRecipients = name === 'sendemail' && args.recipients;
+      if (!args.to && !usesTemplatedRecipients) return err(-32602, 'Missing to');
       if (!args.subject) return err(-32602, 'Missing subject');
       if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
       if (name === 'sendemailfromurls' && (!Array.isArray(args.attachmentUrls) || args.attachmentUrls.length === 0)) return err(-32602, 'Missing attachmentUrls');
       try {
+        const templatedMessages = usesTemplatedRecipients ? buildTemplatedSendMessages(args) : null;
         const attachments = await this.#attachmentsFromArgs(args);
+        if (templatedMessages) {
+          const results = [];
+          for (const message of templatedMessages) {
+            try {
+              const result = await new SmtpClient().send({ ...this.#smtpParams(), ...message, attachments }, this.#credentials);
+              results.push({ to: message.to, ok: true, ...result });
+            } catch (e) {
+              results.push({ to: message.to, ok: false, error: e.message });
+            }
+          }
+          return toolOk({ sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
+        }
         const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, bcc: args.bcc, attachments }, this.#credentials);
         return toolOk(result);
       } catch (e) {
