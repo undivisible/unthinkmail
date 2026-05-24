@@ -137,11 +137,12 @@ function parseAddresses(header) {
 }
 
 // Compose a minimal RFC 2822 message string suitable for APPEND or SMTP
-function buildRawMessage({ from, to, subject, body, htmlBody, cc, replyTo, inReplyTo, references, date, messageId, attachments }) {
+function buildRawMessage({ from, to, subject, body, htmlBody, cc, bcc, replyTo, inReplyTo, references, date, messageId, attachments }) {
   const msgDate   = headerStr(date) || new Date().toUTCString();
   const msgId     = headerStr(messageId) || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
   const toStr     = headerList(to);
   const ccStr     = cc ? headerList(cc) : '';
+  const bccStr    = bcc ? headerList(bcc) : '';
   if (htmlBody != null || (Array.isArray(attachments) && attachments.length)) {
     return buildMimeMessage({
       from,
@@ -150,6 +151,8 @@ function buildRawMessage({ from, to, subject, body, htmlBody, cc, replyTo, inRep
       body: body || '',
       htmlBody,
       cc,
+      bcc,
+      includeBccHeader: true,
       replyTo,
       attachments,
       extraHeaders: {
@@ -164,6 +167,7 @@ function buildRawMessage({ from, to, subject, body, htmlBody, cc, replyTo, inRep
     `From: ${headerStr(from)}`,
     `To: ${toStr}`,
     ccStr     ? `Cc: ${ccStr}` : null,
+    bccStr    ? `Bcc: ${bccStr}` : null,
     replyTo   ? `Reply-To: ${headerStr(replyTo)}`   : null,
     `Subject: ${headerStr(subject) || '(no subject)'}`,
     `Date: ${msgDate}`,
@@ -326,6 +330,7 @@ const TOOLS = [
         body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching attachment contentId with inline true.' },
         cc:      RECIPIENTS_SCHEMA,
+        bcc:     RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
@@ -344,6 +349,7 @@ const TOOLS = [
         body:    { type: 'string', description: 'Plain text email body. Required unless htmlBody is provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching URL attachment contentId with inline true.' },
         cc:      RECIPIENTS_SCHEMA,
+        bcc:     RECIPIENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
       required: ['to', 'subject', 'attachmentUrls'],
@@ -367,6 +373,7 @@ const TOOLS = [
               body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
               htmlBody: { type: 'string', description: 'Optional HTML email body' },
               cc:      RECIPIENTS_SCHEMA,
+              bcc:     RECIPIENTS_SCHEMA,
               attachments: ATTACHMENTS_SCHEMA,
               attachmentUrls: URL_ATTACHMENTS_SCHEMA,
             },
@@ -388,6 +395,8 @@ const TOOLS = [
         uid:    { type: 'string', description: 'UID of the message to reply to' },
         body:   { type: 'string', description: 'Plain text reply body. Required unless attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML reply body' },
+        cc:      RECIPIENTS_SCHEMA,
+        bcc:     RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
@@ -417,6 +426,8 @@ const TOOLS = [
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
         uid:    { type: 'string', description: 'UID of the message to forward' },
         to:     RECIPIENTS_SCHEMA,
+        cc:     RECIPIENTS_SCHEMA,
+        bcc:    RECIPIENTS_SCHEMA,
         note:   { type: 'string', description: 'Optional note to prepend before the forwarded content' },
         includeOriginalAttachments: { type: 'boolean', description: 'Forward original attachments too. Defaults to true.' },
         attachments: ATTACHMENTS_SCHEMA,
@@ -583,6 +594,7 @@ const TOOLS = [
         body:    { type: 'string', description: 'Plain text body. Required unless htmlBody or attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML email body' },
         cc:      RECIPIENTS_SCHEMA,
+        bcc:     RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
         folder:  { type: 'string', description: 'Drafts folder (auto-detected if omitted)' },
@@ -751,7 +763,7 @@ export class ImapSession {
       if (name === 'sendemailfromurls' && (!Array.isArray(args.attachmentUrls) || args.attachmentUrls.length === 0)) return err(-32602, 'Missing attachmentUrls');
       try {
         const attachments = await this.#attachmentsFromArgs(args);
-        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, attachments }, this.#credentials);
+        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, bcc: args.bcc, attachments }, this.#credentials);
         return toolOk(result);
       } catch (e) {
         return toolErr(`${name === 'sendemailfromurls' ? 'Attachment/SMTP' : 'SMTP'} error: ` + e.message);
@@ -771,7 +783,7 @@ export class ImapSession {
         }
         try {
           const attachments = await this.#attachmentsFromArgs(email);
-          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, htmlBody: email.htmlBody, cc: email.cc, attachments }, this.#credentials);
+          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, htmlBody: email.htmlBody, cc: email.cc, bcc: email.bcc, attachments }, this.#credentials);
           results.push({ to: email.to, ok: true, ...r });
         } catch (e) {
           results.push({ to: email.to, ok: false, error: e.message });
@@ -807,6 +819,8 @@ export class ImapSession {
           subject: replySubject,
           body: args.body,
           htmlBody: args.htmlBody,
+          cc: args.cc,
+          bcc: args.bcc,
           attachments,
           extraHeaders: {
             'In-Reply-To': h.messageId,
@@ -856,6 +870,8 @@ export class ImapSession {
         const result = await new SmtpClient().send({
           ...this.#smtpParams(),
           to: args.to,
+          cc: args.cc,
+          bcc: args.bcc,
           subject: fwdSubject,
           body: fwdBody,
           attachments,
@@ -1116,6 +1132,7 @@ export class ImapSession {
           body:    args.body,
           htmlBody: args.htmlBody,
           cc:      args.cc ?? null,
+          bcc:     args.bcc ?? null,
           attachments,
         });
         result = await this.#imap.appendMessage(draftsFolder, rawMsg, ['\\Draft']);

@@ -9,6 +9,18 @@ const parseRecipients = (value) => {
   return raw.map(sanitizeHeader).filter(Boolean);
 };
 
+export const buildRecipientLists = ({ to, cc, bcc }) => {
+  const toList = parseRecipients(to);
+  const ccList = cc ? parseRecipients(cc) : [];
+  const bccList = bcc ? parseRecipients(bcc) : [];
+  return {
+    toList,
+    ccList,
+    bccList,
+    envelopeRecipients: [...toList, ...ccList, ...bccList],
+  };
+};
+
 const base64ToBytes = (s) => Uint8Array.from(atob(String(s).replace(/\s/g, '')), c => c.charCodeAt(0));
 
 const textToBytes = (s) => new TextEncoder().encode(String(s));
@@ -143,9 +155,8 @@ const relatedPart = (body, htmlBody, inlineAttachments) => {
     `--${boundary}--`;
 };
 
-export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, extraHeaders = {}, replyTo, attachments, normalizedAttachments }) {
-  const toList = parseRecipients(to);
-  const ccList = cc ? parseRecipients(cc) : [];
+export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, bcc, includeBccHeader = false, extraHeaders = {}, replyTo, attachments, normalizedAttachments }) {
+  const { toList, ccList, bccList } = buildRecipientLists({ to, cc, bcc });
   const safeFrom = sanitizeHeader(from);
   const safeSubject = sanitizeHeader(subject);
   const attachmentList = normalizedAttachments ?? normalizeAttachments(attachments);
@@ -153,6 +164,7 @@ export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, extraH
   const fileAttachments = attachmentList.filter(a => !(htmlBody != null && a.disposition === 'inline' && a.contentId));
   const toHeader = toList.join(', ');
   const ccHeader = ccList.length ? `Cc: ${ccList.join(', ')}\r\n` : '';
+  const bccHeader = includeBccHeader && bccList.length ? `Bcc: ${bccList.join(', ')}\r\n` : '';
   const extraLines = Object.entries(extraHeaders)
     .filter(([, v]) => v)
     .map(([k, v]) => `${sanitizeHeader(k)}: ${sanitizeHeader(v)}\r\n`)
@@ -160,7 +172,7 @@ export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, extraH
   const replyToHeader = replyTo ? `Reply-To: ${sanitizeHeader(replyTo)}\r\n` : '';
 
   if (attachmentList.length === 0 && htmlBody == null) {
-    return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}` +
+    return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
       `Subject: ${safeSubject}\r\n${replyToHeader}${extraLines}` +
       `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
       String(body ?? '');
@@ -178,7 +190,7 @@ export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, extraH
       `--${boundary}--`;
   }
 
-  return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}` +
+  return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
     `Subject: ${safeSubject}\r\n${replyToHeader}${extraLines}` +
     `MIME-Version: 1.0\r\n${content}`;
 }

@@ -2,7 +2,7 @@
 // Supports SMTPS (port 465, TLS-from-start) and STARTTLS (port 587 / any non-465)
 
 import { connect } from 'cloudflare:sockets';
-import { buildMimeMessage, normalizeAttachments } from './outbound-mime.js';
+import { buildMimeMessage, buildRecipientLists, normalizeAttachments } from './outbound-mime.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -16,23 +16,17 @@ const envelopeAddr = (s) => {
 // Sanitize a header value — strip CRLF to prevent header injection
 const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
 
-const parseRecipients = (value) => {
-  const raw = Array.isArray(value) ? value : String(value ?? '').split(',');
-  return raw.map(sanitizeHeader).filter(Boolean);
-};
-
 const b64utf8 = (s) => btoa(String.fromCharCode(...enc.encode(String(s))));
 
 export class SmtpClient {
-  async send({ host, port, user, pass, from, to, subject, body, htmlBody, cc, extraHeaders = {}, replyTo, signature, attachments }, creds) {
+  async send({ host, port, user, pass, from, to, subject, body, htmlBody, cc, bcc, extraHeaders = {}, replyTo, signature, attachments }, creds) {
     const normalizedAttachments = normalizeAttachments(attachments);
     // Append signature to body if configured
     const sig = signature || creds?.smtp_signature;
     const messageBody = String(body ?? '');
     const signedBody = sig ? `${messageBody}\r\n\r\n${sig}` : messageBody;
     from    = sanitizeHeader(from);
-    const toList = parseRecipients(to);
-    const ccList = cc ? parseRecipients(cc) : [];
+    const { toList, ccList, bccList } = buildRecipientLists({ to, cc, bcc });
     subject = sanitizeHeader(subject);
 
     // Override from address if custom SMTP sender configured
@@ -55,12 +49,13 @@ export class SmtpClient {
       body: signedBody,
       htmlBody,
       cc: ccList,
+      bcc: bccList,
       extraHeaders,
       replyTo: effectiveReplyTo,
       normalizedAttachments,
     });
 
-    await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList, message });
+    await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList: [...ccList, ...bccList], message });
     return { sent: true, to: toList.join(', '), subject, attachments: normalizedAttachments.map(({ filename, mimeType, size }) => ({ filename, mimeType, size })) };
   }
 
@@ -75,9 +70,7 @@ export class SmtpClient {
       }
       fromAddr = sanitizeHeader(fromAddr);
     }
-    const toList = parseRecipients(to);
-    const ccList = cc ? parseRecipients(cc) : [];
-    const bccList = bcc ? parseRecipients(bcc) : [];
+    const { toList, ccList, bccList } = buildRecipientLists({ to, cc, bcc });
     await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList: [...ccList, ...bccList], message: rawMessage });
     return { sent: true, to: toList.join(', ') };
   }

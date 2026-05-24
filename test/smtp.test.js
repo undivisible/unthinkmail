@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { MAX_ATTACHMENTS, buildMimeMessage, normalizeAttachments } from '../src/outbound-mime.js';
+import { MAX_ATTACHMENTS, buildMimeMessage, buildRecipientLists, normalizeAttachments } from '../src/outbound-mime.js';
 
 test('buildMimeMessage keeps simple text messages as text/plain', () => {
   const message = buildMimeMessage({
@@ -12,6 +12,47 @@ test('buildMimeMessage keeps simple text messages as text/plain', () => {
   expect(message).toContain('Content-Type: text/plain; charset=utf-8');
   expect(message).not.toContain('multipart/mixed');
   expect(message).toEndWith('Plain body');
+});
+
+test('buildRecipientLists includes bcc only in envelope recipients', () => {
+  const recipients = buildRecipientLists({
+    to: ['primary@example.com', ' second@example.com '],
+    cc: 'copy@example.com, other-copy@example.com',
+    bcc: ['hidden@example.com', ' hidden-two@example.com '],
+  });
+
+  expect(recipients.toList).toEqual(['primary@example.com', 'second@example.com']);
+  expect(recipients.ccList).toEqual(['copy@example.com', 'other-copy@example.com']);
+  expect(recipients.bccList).toEqual(['hidden@example.com', 'hidden-two@example.com']);
+  expect(recipients.envelopeRecipients).toEqual([
+    'primary@example.com',
+    'second@example.com',
+    'copy@example.com',
+    'other-copy@example.com',
+    'hidden@example.com',
+    'hidden-two@example.com',
+  ]);
+});
+
+test('buildMimeMessage only emits bcc when explicitly requested for drafts', () => {
+  const sentMessage = buildMimeMessage({
+    from: 'sender@example.com',
+    to: 'recipient@example.com',
+    bcc: ['hidden@example.com'],
+    subject: 'Hello',
+    body: 'Plain body',
+  });
+  const draftMessage = buildMimeMessage({
+    from: 'sender@example.com',
+    to: 'recipient@example.com',
+    bcc: ['hidden@example.com'],
+    includeBccHeader: true,
+    subject: 'Hello',
+    body: 'Plain body',
+  });
+
+  expect(sentMessage).not.toContain('Bcc: hidden@example.com');
+  expect(draftMessage).toContain('Bcc: hidden@example.com');
 });
 
 test('buildMimeMessage emits multipart attachments', () => {
