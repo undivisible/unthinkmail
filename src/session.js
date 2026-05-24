@@ -357,35 +357,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'batchsend',
-    description: 'Send multiple emails in one call. Each email supports multiple recipients via comma-separated string, array, or single address.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        emails: {
-          type: 'array',
-          description: 'Array of emails to send',
-          items: {
-            type: 'object',
-            properties: {
-              to:      RECIPIENTS_SCHEMA,
-              subject: { type: 'string' },
-              body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
-              htmlBody: { type: 'string', description: 'Optional HTML email body' },
-              cc:      RECIPIENTS_SCHEMA,
-              bcc:     RECIPIENTS_SCHEMA,
-              attachments: ATTACHMENTS_SCHEMA,
-              attachmentUrls: URL_ATTACHMENTS_SCHEMA,
-            },
-            required: ['to', 'subject'],
-            anyOf: MESSAGE_CONTENT_ANY_OF,
-          },
-        },
-      },
-      required: ['emails'],
-    },
-  },
-  {
     name: 'replyemail',
     description: 'Reply to an existing message, preserving threading headers (In-Reply-To / References)',
     inputSchema: {
@@ -768,28 +739,6 @@ export class ImapSession {
       } catch (e) {
         return toolErr(`${name === 'sendemailfromurls' ? 'Attachment/SMTP' : 'SMTP'} error: ` + e.message);
       }
-    }
-
-    // --- batchsend (multiple emails) ---
-    if (name === 'batchsend') {
-      const emails = args.emails;
-      if (!Array.isArray(emails) || emails.length === 0) return err(-32602, 'Missing emails array');
-      if (emails.length > 50) return err(-32602, 'Maximum 50 emails per batch');
-      const results = [];
-      for (const email of emails) {
-        if (!email.to || !email.subject || !hasMessageContent(email)) {
-          results.push({ to: email.to, ok: false, error: 'Missing required field' });
-          continue;
-        }
-        try {
-          const attachments = await this.#attachmentsFromArgs(email);
-          const r = await new SmtpClient().send({ ...this.#smtpParams(), to: email.to, subject: email.subject, body: email.body, htmlBody: email.htmlBody, cc: email.cc, bcc: email.bcc, attachments }, this.#credentials);
-          results.push({ to: email.to, ok: true, ...r });
-        } catch (e) {
-          results.push({ to: email.to, ok: false, error: e.message });
-        }
-      }
-      return toolOk({ sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
     }
 
     // --- replyemail (needs IMAP for headers, then SMTP) ---
