@@ -79,9 +79,7 @@ test('buildMimeMessage emits multipart attachments', () => {
 });
 
 test('normalizeAttachments rejects invalid base64 content', () => {
-  expect(() => normalizeAttachments([
-    { filename: 'bad.txt', content: 'not valid base64!!!!' },
-  ])).toThrow('valid base64');
+  expect(() => normalizeAttachments([{ filename: 'bad.txt', content: 'not valid base64!!!!' }])).toThrow('valid base64');
 });
 
 test('normalizeAttachments rejects too many attachments', () => {
@@ -94,9 +92,7 @@ test('normalizeAttachments rejects too many attachments', () => {
 });
 
 test('normalizeAttachments sanitizes filenames and MIME types', () => {
-  const [attachment] = normalizeAttachments([
-    { filename: '../résumé.txt', mimeType: 'bad/type/value', content: 'b2s=' },
-  ]);
+  const [attachment] = normalizeAttachments([{ filename: '../résumé.txt', mimeType: 'bad/type/value', content: 'b2s=' }]);
 
   expect(attachment.filename).toBe('.._resume.txt');
   expect(attachment.mimeType).toBe('application/octet-stream');

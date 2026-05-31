@@ -13,3 +13,11 @@ test('sendemail schema exposes templated recipients', async () => {
   expect(sessionSource).toContain('recipients: TEMPLATED_RECIPIENTS_SCHEMA');
   expect(sessionSource).toContain('variables: { type:');
 });
+
+test('MCP tool schemas avoid composition keywords for Anthropic compatibility', async () => {
+  const sessionSource = await Bun.file('src/session.js').text();
+
+  expect(sessionSource).not.toContain('anyOf');
+  expect(sessionSource).not.toContain('oneOf');
+  expect(sessionSource).not.toContain('allOf');
+});

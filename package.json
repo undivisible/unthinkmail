@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev":    "WRANGLER_SEND_METRICS=false wrangler dev",
+    "dev": "WRANGLER_SEND_METRICS=false wrangler dev",
     "deploy": "WRANGLER_SEND_METRICS=false wrangler deploy",
     "format": "biome format --write src/outbound-mime.js src/send-template.js src/smtp.js src/session.js test/send-template.test.js test/smtp.test.js test/tool-surface.test.js package.json biome.jsonc",
-    "lint":   "biome lint --diagnostic-level=error src test examples",
-    "tail":   "WRANGLER_SEND_METRICS=false wrangler tail",
-    "test":   "bun test",
+    "lint": "biome lint --diagnostic-level=error src test examples",
+    "tail": "WRANGLER_SEND_METRICS=false wrangler tail",
+    "test": "bun test",
     "typecheck": "WRANGLER_SEND_METRICS=false wrangler deploy --dry-run --outdir .wrangler/typecheck"
   },
   "dependencies": {

@@ -10,7 +10,7 @@ import { buildTemplatedSendMessages } from './send-template.js';
 import { fetchUrlAttachments } from './url-attachments.js';
 
 // IMAP date format: DD-Mon-YYYY (e.g. 1-Jan-2024)
-const IMAP_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const IMAP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function toImapDate(s) {
   const d = new Date(s + 'T00:00:00Z');
   if (isNaN(d)) throw new Error('Invalid date: ' + s);
@@ -18,11 +18,23 @@ function toImapDate(s) {
 }
 
 // Escape a value for use in an IMAP quoted string
-const imapStr = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, '')}"`;
-const headerStr = (s) => String(s ?? '').replace(/[\r\n]/g, '').trim();
-const headerList = (value) => Array.isArray(value)
-  ? value.map(headerStr).filter(Boolean).join(', ')
-  : String(value ?? '').split(',').map(headerStr).filter(Boolean).join(', ');
+const imapStr = (s) =>
+  `"${String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/[\r\n]/g, '')}"`;
+const headerStr = (s) =>
+  String(s ?? '')
+    .replace(/[\r\n]/g, '')
+    .trim();
+const headerList = (value) =>
+  Array.isArray(value)
+    ? value.map(headerStr).filter(Boolean).join(', ')
+    : String(value ?? '')
+        .split(',')
+        .map(headerStr)
+        .filter(Boolean)
+        .join(', ');
 
 function validateSearchQuery(query) {
   const s = String(query);
@@ -53,10 +65,11 @@ function buildSearchQuery(args) {
 // Build a compact IMAP UID sequence string from an array of UID strings.
 // e.g. ['1','2','3','5','10','11'] → "1:3,5,10:11"
 function buildUidSequence(uids) {
-  const nums = [...new Set(uids.map(u => parseInt(u, 10)).filter(n => !isNaN(n)))].sort((a, b) => a - b);
+  const nums = [...new Set(uids.map((u) => parseInt(u, 10)).filter((n) => !isNaN(n)))].sort((a, b) => a - b);
   if (nums.length === 0) throw new Error('No valid UIDs');
   const parts = [];
-  let start = nums[0], end = nums[0];
+  let start = nums[0],
+    end = nums[0];
   for (let i = 1; i < nums.length; i++) {
     if (nums[i] === end + 1) {
       end = nums[i];
@@ -139,11 +152,11 @@ function parseAddresses(header) {
 
 // Compose a minimal RFC 2822 message string suitable for APPEND or SMTP
 function buildRawMessage({ from, to, subject, body, htmlBody, cc, bcc, replyTo, inReplyTo, references, date, messageId, attachments }) {
-  const msgDate   = headerStr(date) || new Date().toUTCString();
-  const msgId     = headerStr(messageId) || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
-  const toStr     = headerList(to);
-  const ccStr     = cc ? headerList(cc) : '';
-  const bccStr    = bcc ? headerList(bcc) : '';
+  const msgDate = headerStr(date) || new Date().toUTCString();
+  const msgId = headerStr(messageId) || `<${Date.now()}.${Math.random().toString(36).slice(2)}@unthinkmail.local>`;
+  const toStr = headerList(to);
+  const ccStr = cc ? headerList(cc) : '';
+  const bccStr = bcc ? headerList(bcc) : '';
   if (htmlBody != null || (Array.isArray(attachments) && attachments.length)) {
     return buildMimeMessage({
       from,
@@ -167,48 +180,50 @@ function buildRawMessage({ from, to, subject, body, htmlBody, cc, bcc, replyTo, 
   const lines = [
     `From: ${headerStr(from)}`,
     `To: ${toStr}`,
-    ccStr     ? `Cc: ${ccStr}` : null,
-    bccStr    ? `Bcc: ${bccStr}` : null,
-    replyTo   ? `Reply-To: ${headerStr(replyTo)}`   : null,
+    ccStr ? `Cc: ${ccStr}` : null,
+    bccStr ? `Bcc: ${bccStr}` : null,
+    replyTo ? `Reply-To: ${headerStr(replyTo)}` : null,
     `Subject: ${headerStr(subject) || '(no subject)'}`,
     `Date: ${msgDate}`,
     `Message-ID: ${msgId}`,
-    inReplyTo  ? `In-Reply-To: ${headerStr(inReplyTo)}`  : null,
-    references ? `References: ${headerStr(references)}`  : null,
+    inReplyTo ? `In-Reply-To: ${headerStr(inReplyTo)}` : null,
+    references ? `References: ${headerStr(references)}` : null,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=utf-8',
     'Content-Transfer-Encoding: 8bit',
     '',
     body || '',
-  ].filter(l => l !== null);
+  ].filter((l) => l !== null);
   return lines.join('\r\n');
 }
 
 const ATTACHMENT_SCHEMA = {
   type: 'object',
   properties: {
-    filename: { type: 'string', description: 'ASCII filename. Convert non-ASCII filenames to ASCII because outbound MIME filename encoding is not emitted yet and some mail clients show encoded filenames poorly.' },
+    filename: {
+      type: 'string',
+      description:
+        'ASCII filename. Convert non-ASCII filenames to ASCII because outbound MIME filename encoding is not emitted yet and some mail clients show encoded filenames poorly.',
+    },
     mimeType: { type: 'string' },
-    content:  { type: 'string', description: 'Base64-encoded file content' },
+    content: { type: 'string', description: 'Base64-encoded file content' },
     contentBase64: { type: 'string', description: 'Base64-encoded file content' },
     contentDataUrl: { type: 'string', description: 'data: URL with base64 content' },
     contentText: { type: 'string', description: 'Raw text content; server UTF-8 encodes it' },
-    contentBytes: { type: 'array', items: { type: 'integer', minimum: 0, maximum: 255 }, description: 'Raw bytes as integers 0-255; server base64 encodes them' },
+    contentBytes: {
+      type: 'array',
+      items: { type: 'integer', minimum: 0, maximum: 255 },
+      description: 'Raw bytes as integers 0-255; server base64 encodes them',
+    },
     contentId: { type: 'string', description: 'Content-ID for inline use, referenced in HTML as cid:contentId' },
     inline: { type: 'boolean', description: 'Set true for inline images referenced by htmlBody' },
   },
   required: ['filename'],
-  anyOf: [
-    { required: ['content'] },
-    { required: ['contentBase64'] },
-    { required: ['contentDataUrl'] },
-    { required: ['contentText'] },
-    { required: ['contentBytes'] },
-  ],
 };
 
 const sizeMb = (bytes) => bytes / (1024 * 1024);
-const LOCAL_ATTACHMENT_GUIDANCE = 'Local file guidance for Claude: this hosted server cannot read local paths. Do not paste large base64 directly into chat if it would waste tokens. If a user wants to send a local file, either ask for/upload a public HTTPS URL and use sendemailfromurls, or generate a small local script that reads the file, base64-encodes it, and POSTs a tools/call request to this MCP endpoint with Authorization: Bearer <key>. The script should send attachments with filename, mimeType, and contentBase64.';
+const LOCAL_ATTACHMENT_GUIDANCE =
+  'Local file guidance for Claude: this hosted server cannot read local paths. Do not paste large base64 directly into chat if it would waste tokens. If a user wants to send a local file, either ask for/upload a public HTTPS URL and use sendemailfromurls, or generate a small local script that reads the file, base64-encodes it, and POSTs a tools/call request to this MCP endpoint with Authorization: Bearer <key>. The script should send attachments with filename, mimeType, and contentBase64.';
 const ATTACHMENT_LIMITS = `Optional attachments. Maximum ${MAX_ATTACHMENTS} attachments per email, ${sizeMb(MAX_ATTACHMENT_BYTES)} MB each, ${sizeMb(MAX_TOTAL_ATTACHMENT_BYTES)} MB total. Each item must include an ASCII filename plus one content field: content/contentBase64, contentDataUrl, contentText, or contentBytes. mimeType is optional. ${LOCAL_ATTACHMENT_GUIDANCE}`;
 
 const ATTACHMENTS_SCHEMA = {
@@ -236,20 +251,12 @@ const URL_ATTACHMENTS_SCHEMA = {
   type: 'array',
   description: HOSTED_ATTACHMENT_GUIDANCE,
   minItems: 1,
-  items: {
-    anyOf: [
-      { type: 'string' },
-      URL_ATTACHMENT_SCHEMA,
-    ],
-  },
+  items: URL_ATTACHMENT_SCHEMA,
 };
 
 const RECIPIENTS_SCHEMA = {
-  anyOf: [
-    { type: 'string' },
-    { type: 'array', items: { type: 'string' } },
-  ],
-  description: 'Email recipient(s): single address, comma-separated addresses, or an array of addresses.',
+  type: 'string',
+  description: 'Email recipient(s): single address or comma-separated addresses.',
 };
 
 const TEMPLATED_RECIPIENTS_SCHEMA = {
@@ -275,8 +282,6 @@ const hasMessageContent = (args) =>
   (Array.isArray(args.attachments) && args.attachments.length > 0) ||
   (Array.isArray(args.attachmentUrls) && args.attachmentUrls.length > 0);
 
-const MESSAGE_CONTENT_ANY_OF = [{ required: ['body'] }, { required: ['htmlBody'] }, { required: ['attachments'] }, { required: ['attachmentUrls'] }];
-
 const TOOLS = [
   {
     name: 'listfolders',
@@ -289,13 +294,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:  { type: 'string', description: 'Folder to search (default: INBOX)' },
-        unseen:  { type: 'boolean', description: 'Only return unread messages' },
-        from:    { type: 'string', description: 'Filter by sender address or name' },
+        folder: { type: 'string', description: 'Folder to search (default: INBOX)' },
+        unseen: { type: 'boolean', description: 'Only return unread messages' },
+        from: { type: 'string', description: 'Filter by sender address or name' },
         subject: { type: 'string', description: 'Filter by subject text' },
-        since:   { type: 'string', description: 'Messages on or after this date (YYYY-MM-DD)' },
-        before:  { type: 'string', description: 'Messages before this date (YYYY-MM-DD)' },
-        query:   { type: 'string', description: 'Raw IMAP SEARCH criteria (overrides other fields when provided)' },
+        since: { type: 'string', description: 'Messages on or after this date (YYYY-MM-DD)' },
+        before: { type: 'string', description: 'Messages before this date (YYYY-MM-DD)' },
+        query: { type: 'string', description: 'Raw IMAP SEARCH criteria (overrides other fields when provided)' },
       },
       required: [],
     },
@@ -307,7 +312,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:    { type: 'string', description: 'Message UID from searchmessages' },
+        uid: { type: 'string', description: 'Message UID from searchmessages' },
       },
       required: ['uid'],
     },
@@ -319,7 +324,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string' },
-        uid:    { type: 'string' },
+        uid: { type: 'string' },
       },
       required: ['uid'],
     },
@@ -330,31 +335,33 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:      { type: 'string' },
-        uid:         { type: 'string' },
+        folder: { type: 'string' },
+        uid: { type: 'string' },
         destination: { type: 'string', description: 'Destination folder name' },
       },
       required: ['uid', 'destination'],
     },
-},
+  },
   {
     name: 'sendemail',
     description: `Compose and send a new email via SMTP. Supports multiple recipients via comma-separated string, array, or single address. For per-recipient personalization, omit to/cc/bcc and pass recipients with variables, then use placeholders like {name} in subject, body, or htmlBody. ${HOSTED_ATTACHMENT_GUIDANCE} ${LOCAL_ATTACHMENT_GUIDANCE}`,
     inputSchema: {
       type: 'object',
       properties: {
-        to:      RECIPIENTS_SCHEMA,
+        to: RECIPIENTS_SCHEMA,
         recipients: TEMPLATED_RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Email subject line' },
-        body:    { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
-        htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching attachment contentId with inline true.' },
-        cc:      RECIPIENTS_SCHEMA,
-        bcc:     RECIPIENTS_SCHEMA,
+        body: { type: 'string', description: 'Plain text email body. Required unless attachments are provided.' },
+        htmlBody: {
+          type: 'string',
+          description: 'Optional HTML email body. Inline images should use cid:contentId and matching attachment contentId with inline true.',
+        },
+        cc: RECIPIENTS_SCHEMA,
+        bcc: RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
       required: ['subject'],
-      anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
   {
@@ -363,16 +370,18 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        to:      RECIPIENTS_SCHEMA,
+        to: RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Email subject line' },
-        body:    { type: 'string', description: 'Plain text email body. Required unless htmlBody is provided.' },
-        htmlBody: { type: 'string', description: 'Optional HTML email body. Inline images should use cid:contentId and matching URL attachment contentId with inline true.' },
-        cc:      RECIPIENTS_SCHEMA,
-        bcc:     RECIPIENTS_SCHEMA,
+        body: { type: 'string', description: 'Plain text email body. Required unless htmlBody is provided.' },
+        htmlBody: {
+          type: 'string',
+          description: 'Optional HTML email body. Inline images should use cid:contentId and matching URL attachment contentId with inline true.',
+        },
+        cc: RECIPIENTS_SCHEMA,
+        bcc: RECIPIENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
       required: ['to', 'subject', 'attachmentUrls'],
-      anyOf: [{ required: ['body'] }, { required: ['htmlBody'] }, { required: ['attachmentUrls'] }],
     },
   },
   {
@@ -382,16 +391,15 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder containing the original message (default: INBOX)' },
-        uid:    { type: 'string', description: 'UID of the message to reply to' },
-        body:   { type: 'string', description: 'Plain text reply body. Required unless attachments are provided.' },
+        uid: { type: 'string', description: 'UID of the message to reply to' },
+        body: { type: 'string', description: 'Plain text reply body. Required unless attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML reply body' },
-        cc:      RECIPIENTS_SCHEMA,
-        bcc:     RECIPIENTS_SCHEMA,
+        cc: RECIPIENTS_SCHEMA,
+        bcc: RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
       },
       required: ['uid'],
-      anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
   {
@@ -401,8 +409,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:    { type: 'string', description: 'Message UID' },
-        mark:   { type: 'string', enum: ['read', 'unread', 'flagged', 'unflagged'], description: 'Mark to apply' },
+        uid: { type: 'string', description: 'Message UID' },
+        mark: { type: 'string', enum: ['read', 'unread', 'flagged', 'unflagged'], description: 'Mark to apply' },
       },
       required: ['uid', 'mark'],
     },
@@ -414,11 +422,11 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:    { type: 'string', description: 'UID of the message to forward' },
-        to:     RECIPIENTS_SCHEMA,
-        cc:     RECIPIENTS_SCHEMA,
-        bcc:    RECIPIENTS_SCHEMA,
-        note:   { type: 'string', description: 'Optional note to prepend before the forwarded content' },
+        uid: { type: 'string', description: 'UID of the message to forward' },
+        to: RECIPIENTS_SCHEMA,
+        cc: RECIPIENTS_SCHEMA,
+        bcc: RECIPIENTS_SCHEMA,
+        note: { type: 'string', description: 'Optional note to prepend before the forwarded content' },
         includeOriginalAttachments: { type: 'boolean', description: 'Forward original attachments too. Defaults to true.' },
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
@@ -433,8 +441,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder to search (default: INBOX)' },
-        uid:    { type: 'string', description: 'UID of any message in the thread' },
-        order:  { type: 'string', enum: ['asc', 'desc'], description: 'Date sort order (default: asc)' },
+        uid: { type: 'string', description: 'UID of any message in the thread' },
+        order: { type: 'string', enum: ['asc', 'desc'], description: 'Date sort order (default: asc)' },
       },
       required: ['uid'],
     },
@@ -445,8 +453,8 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:   { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:      { type: 'string', description: 'Message UID' },
+        folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
+        uid: { type: 'string', description: 'Message UID' },
         filename: { type: 'string', description: 'Exact filename of the attachment to download' },
       },
       required: ['uid', 'filename'],
@@ -458,9 +466,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:      { type: 'string', description: 'Source folder (default: INBOX)' },
-        uids:        { type: 'array', items: { type: 'string' }, description: 'Array of message UIDs (max 100)' },
-        action:      { type: 'string', enum: ['read', 'unread', 'flag', 'unflag', 'delete', 'move'], description: 'Action to apply' },
+        folder: { type: 'string', description: 'Source folder (default: INBOX)' },
+        uids: { type: 'array', items: { type: 'string' }, description: 'Array of message UIDs (max 100)' },
+        action: { type: 'string', enum: ['read', 'unread', 'flag', 'unflag', 'delete', 'move'], description: 'Action to apply' },
         destination: { type: 'string', description: 'Destination folder — required when action is "move"' },
       },
       required: ['uids', 'action'],
@@ -473,7 +481,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:    { type: 'string', description: 'Message UID' },
+        uid: { type: 'string', description: 'Message UID' },
       },
       required: ['uid'],
     },
@@ -485,7 +493,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder to fetch from (default: INBOX)' },
-        uids:   { type: 'array', items: { type: 'string' }, description: 'Array of message UIDs to fetch (max 100)' },
+        uids: { type: 'array', items: { type: 'string' }, description: 'Array of message UIDs to fetch (max 100)' },
       },
       required: ['uids'],
     },
@@ -518,7 +526,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:  { type: 'string', description: 'Current folder name' },
+        folder: { type: 'string', description: 'Current folder name' },
         newName: { type: 'string', description: 'New folder name' },
       },
       required: ['folder', 'newName'],
@@ -541,9 +549,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:  { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:     { type: 'string', description: 'Message UID' },
-        label:   { type: 'string', description: 'Label / keyword to add (e.g. "important", "needs-reply")' },
+        folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
+        uid: { type: 'string', description: 'Message UID' },
+        label: { type: 'string', description: 'Label / keyword to add (e.g. "important", "needs-reply")' },
       },
       required: ['uid', 'label'],
     },
@@ -554,9 +562,9 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        folder:  { type: 'string', description: 'Folder containing the message (default: INBOX)' },
-        uid:     { type: 'string', description: 'Message UID' },
-        label:   { type: 'string', description: 'Label / keyword to remove' },
+        folder: { type: 'string', description: 'Folder containing the message (default: INBOX)' },
+        uid: { type: 'string', description: 'Message UID' },
+        label: { type: 'string', description: 'Label / keyword to remove' },
       },
       required: ['uid', 'label'],
     },
@@ -568,7 +576,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Folder to scan (default: INBOX)' },
-        limit:  { type: 'number', description: 'Max messages to scan (default: 100, max: 200)' },
+        limit: { type: 'number', description: 'Max messages to scan (default: 100, max: 200)' },
       },
       required: [],
     },
@@ -579,18 +587,17 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        to:      RECIPIENTS_SCHEMA,
+        to: RECIPIENTS_SCHEMA,
         subject: { type: 'string', description: 'Subject line' },
-        body:    { type: 'string', description: 'Plain text body. Required unless htmlBody or attachments are provided.' },
+        body: { type: 'string', description: 'Plain text body. Required unless htmlBody or attachments are provided.' },
         htmlBody: { type: 'string', description: 'Optional HTML email body' },
-        cc:      RECIPIENTS_SCHEMA,
-        bcc:     RECIPIENTS_SCHEMA,
+        cc: RECIPIENTS_SCHEMA,
+        bcc: RECIPIENTS_SCHEMA,
         attachments: ATTACHMENTS_SCHEMA,
         attachmentUrls: URL_ATTACHMENTS_SCHEMA,
-        folder:  { type: 'string', description: 'Drafts folder (auto-detected if omitted)' },
+        folder: { type: 'string', description: 'Drafts folder (auto-detected if omitted)' },
       },
       required: ['to', 'subject'],
-      anyOf: MESSAGE_CONTENT_ANY_OF,
     },
   },
   {
@@ -599,7 +606,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        uid:    { type: 'string', description: 'UID of the draft to send' },
+        uid: { type: 'string', description: 'UID of the draft to send' },
         folder: { type: 'string', description: 'Drafts folder (auto-detected if omitted)' },
       },
       required: ['uid'],
@@ -612,7 +619,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         folder: { type: 'string', description: 'Drafts folder name (auto-detected if omitted)' },
-        limit:  { type: 'number', description: 'Maximum number of drafts to return (default: 50)' },
+        limit: { type: 'number', description: 'Maximum number of drafts to return (default: 50)' },
       },
       required: [],
     },
@@ -640,7 +647,8 @@ export class ImapSession {
       // Update credentials if provided (injected by mcp.js Worker, not from clients)
       if (body._credentials) {
         const creds = body._credentials;
-        const changed = !this.#credentials ||
+        const changed =
+          !this.#credentials ||
           this.#credentials.imap_host !== creds.imap_host ||
           this.#credentials.imap_user !== creds.imap_user ||
           this.#credentials.imap_port !== creds.imap_port;
@@ -658,12 +666,7 @@ export class ImapSession {
     if (!this.#credentials) throw new Error('No credentials');
     console.log('[imap] connecting to', this.#credentials.imap_host, this.#credentials.imap_port);
     this.#imap = new ImapClient();
-    await this.#imap.connect(
-      this.#credentials.imap_host,
-      this.#credentials.imap_port,
-      this.#credentials.imap_user,
-      this.#credentials.imap_pass,
-    );
+    await this.#imap.connect(this.#credentials.imap_host, this.#credentials.imap_port, this.#credentials.imap_user, this.#credentials.imap_pass);
     console.log('[imap] authenticated');
   }
 
@@ -676,13 +679,11 @@ export class ImapSession {
 
   async #fetchAttachmentsForSending(folder, uid) {
     const bsRaw = await this.#imap.fetchBodyStructure(folder, uid);
-    const parts = parseBodyStructure(bsRaw).filter(p => p.filename);
+    const parts = parseBodyStructure(bsRaw).filter((p) => p.filename);
     const attachments = [];
     let total = 0;
     for (const part of parts) {
-      const decodedSize = part.encoding === 'base64'
-        ? Math.floor(part.size * 0.75)
-        : part.size;
+      const decodedSize = part.encoding === 'base64' ? Math.floor(part.size * 0.75) : part.size;
       if (decodedSize > MAX_ATTACHMENT_BYTES) {
         throw new Error(`Original attachment "${part.filename}" exceeds ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`);
       }
@@ -703,10 +704,7 @@ export class ImapSession {
   }
 
   async #attachmentsFromArgs(args) {
-    return [
-      ...(Array.isArray(args.attachments) ? args.attachments : []),
-      ...await fetchUrlAttachments(args.attachmentUrls),
-    ];
+    return [...(Array.isArray(args.attachments) ? args.attachments : []), ...(await fetchUrlAttachments(args.attachmentUrls))];
   }
 
   #smtpParams() {
@@ -723,10 +721,10 @@ export class ImapSession {
   }
 
   async #handleRpc({ method, params, id }) {
-    const ok      = (result)         => ({ jsonrpc: '2.0', id, result });
-    const err     = (code, message)  => ({ jsonrpc: '2.0', id, error: { code, message } });
-    const toolOk  = (data)           => ok({ content: [{ type: 'text', text: JSON.stringify(data) }], isError: false });
-    const toolErr = (msg)            => ok({ content: [{ type: 'text', text: msg }], isError: true });
+    const ok = (result) => ({ jsonrpc: '2.0', id, result });
+    const err = (code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
+    const toolOk = (data) => ok({ content: [{ type: 'text', text: JSON.stringify(data) }], isError: false });
+    const toolErr = (msg) => ok({ content: [{ type: 'text', text: msg }], isError: true });
 
     if (!method) return err(-32600, 'Missing method');
     if (method.startsWith('notifications/') || method === 'ping') return ok({});
@@ -751,7 +749,8 @@ export class ImapSession {
       if (!args.to && !usesTemplatedRecipients) return err(-32602, 'Missing to');
       if (!args.subject) return err(-32602, 'Missing subject');
       if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
-      if (name === 'sendemailfromurls' && (!Array.isArray(args.attachmentUrls) || args.attachmentUrls.length === 0)) return err(-32602, 'Missing attachmentUrls');
+      if (name === 'sendemailfromurls' && (!Array.isArray(args.attachmentUrls) || args.attachmentUrls.length === 0))
+        return err(-32602, 'Missing attachmentUrls');
       try {
         const templatedMessages = usesTemplatedRecipients ? buildTemplatedSendMessages(args) : null;
         const attachments = await this.#attachmentsFromArgs(args);
@@ -765,9 +764,12 @@ export class ImapSession {
               results.push({ to: message.to, ok: false, error: e.message });
             }
           }
-          return toolOk({ sent: results.filter(r => r.ok).length, failed: results.filter(r => !r.ok).length, results });
+          return toolOk({ sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results });
         }
-        const result = await new SmtpClient().send({ ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, bcc: args.bcc, attachments }, this.#credentials);
+        const result = await new SmtpClient().send(
+          { ...this.#smtpParams(), to: args.to, subject: args.subject, body: args.body, htmlBody: args.htmlBody, cc: args.cc, bcc: args.bcc, attachments },
+          this.#credentials,
+        );
         return toolOk(result);
       } catch (e) {
         return toolErr(`${name === 'sendemailfromurls' ? 'Attachment/SMTP' : 'SMTP'} error: ` + e.message);
@@ -776,7 +778,7 @@ export class ImapSession {
 
     // --- replyemail (needs IMAP for headers, then SMTP) ---
     if (name === 'replyemail') {
-      if (!args.uid)  return err(-32602, 'Missing uid');
+      if (!args.uid) return err(-32602, 'Missing uid');
       if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
       try {
         await this.#ensureConnected();
@@ -795,20 +797,23 @@ export class ImapSession {
 
         const attachments = await this.#attachmentsFromArgs(args);
 
-        const result = await new SmtpClient().send({
-          ...this.#smtpParams(),
-          to: replyTo,
-          subject: replySubject,
-          body: args.body,
-          htmlBody: args.htmlBody,
-          cc: args.cc,
-          bcc: args.bcc,
-          attachments,
-          extraHeaders: {
-            'In-Reply-To': h.messageId,
-            'References':  refs,
+        const result = await new SmtpClient().send(
+          {
+            ...this.#smtpParams(),
+            to: replyTo,
+            subject: replySubject,
+            body: args.body,
+            htmlBody: args.htmlBody,
+            cc: args.cc,
+            bcc: args.bcc,
+            attachments,
+            extraHeaders: {
+              'In-Reply-To': h.messageId,
+              References: refs,
+            },
           },
-        }, this.#credentials);
+          this.#credentials,
+        );
         return toolOk(result);
       } catch (e) {
         await this.#disconnect();
@@ -819,7 +824,7 @@ export class ImapSession {
     // --- forwardemail (needs IMAP to fetch original, then SMTP) ---
     if (name === 'forwardemail') {
       if (!args.uid) return err(-32602, 'Missing uid');
-      if (!args.to)  return err(-32602, 'Missing to');
+      if (!args.to) return err(-32602, 'Missing to');
       try {
         await this.#ensureConnected();
       } catch (e) {
@@ -833,32 +838,34 @@ export class ImapSession {
         const fwdSubject = /^fwd:/i.test(origSubject) ? origSubject : 'Fwd: ' + origSubject;
 
         const note = args.note ? args.note + '\r\n\r\n' : '';
-        const fwdBody = note
-          + '---------- Forwarded message ----------\r\n'
-          + `From: ${original.from || ''}\r\n`
-          + `Date: ${original.date || ''}\r\n`
-          + `Subject: ${origSubject}\r\n`
-          + `To: ${original.to || ''}\r\n`
-          + '\r\n'
-          + (original.body || '');
+        const fwdBody =
+          note +
+          '---------- Forwarded message ----------\r\n' +
+          `From: ${original.from || ''}\r\n` +
+          `Date: ${original.date || ''}\r\n` +
+          `Subject: ${origSubject}\r\n` +
+          `To: ${original.to || ''}\r\n` +
+          '\r\n' +
+          (original.body || '');
 
         const extraHeaders = {};
         if (original.messageId) extraHeaders['X-Forwarded-Message-Id'] = original.messageId;
-        const originalAttachments = args.includeOriginalAttachments === false
-          ? []
-          : await this.#fetchAttachmentsForSending(folder, args.uid);
-        const attachments = [...originalAttachments, ...await this.#attachmentsFromArgs(args)];
+        const originalAttachments = args.includeOriginalAttachments === false ? [] : await this.#fetchAttachmentsForSending(folder, args.uid);
+        const attachments = [...originalAttachments, ...(await this.#attachmentsFromArgs(args))];
 
-        const result = await new SmtpClient().send({
-          ...this.#smtpParams(),
-          to: args.to,
-          cc: args.cc,
-          bcc: args.bcc,
-          subject: fwdSubject,
-          body: fwdBody,
-          attachments,
-          extraHeaders,
-        }, this.#credentials);
+        const result = await new SmtpClient().send(
+          {
+            ...this.#smtpParams(),
+            to: args.to,
+            cc: args.cc,
+            bcc: args.bcc,
+            subject: fwdSubject,
+            body: fwdBody,
+            attachments,
+            extraHeaders,
+          },
+          this.#credentials,
+        );
         return toolOk(result);
       } catch (e) {
         await this.#disconnect();
@@ -877,49 +884,45 @@ export class ImapSession {
       let result;
       if (name === 'listfolders') {
         result = await this.#imap.listFolders();
-
       } else if (name === 'searchmessages') {
         let query;
-        try { query = buildSearchQuery(args); } catch (e) { return err(-32602, e.message); }
+        try {
+          query = buildSearchQuery(args);
+        } catch (e) {
+          return err(-32602, e.message);
+        }
         result = await this.#imap.searchMessages(args.folder ?? 'INBOX', query);
-
       } else if (name === 'getmessage') {
         if (!args.uid) return err(-32602, 'Missing uid');
         result = await this.#imap.getMessage(args.folder ?? 'INBOX', args.uid);
-
       } else if (name === 'deletemessage') {
         if (!args.uid) return err(-32602, 'Missing uid');
         result = await this.#imap.deleteMessage(args.folder ?? 'INBOX', args.uid);
-
       } else if (name === 'movemessage') {
-        if (!args.uid)         return err(-32602, 'Missing uid');
+        if (!args.uid) return err(-32602, 'Missing uid');
         if (!args.destination) return err(-32602, 'Missing destination');
         result = await this.#imap.moveMessage(args.folder ?? 'INBOX', args.uid, args.destination);
-
       } else if (name === 'markmessage') {
-        if (!args.uid)  return err(-32602, 'Missing uid');
+        if (!args.uid) return err(-32602, 'Missing uid');
         if (!args.mark) return err(-32602, 'Missing mark');
         const MARK_MAP = {
-          read:      ['+FLAGS', ['\\Seen']],
-          unread:    ['-FLAGS', ['\\Seen']],
-          flagged:   ['+FLAGS', ['\\Flagged']],
+          read: ['+FLAGS', ['\\Seen']],
+          unread: ['-FLAGS', ['\\Seen']],
+          flagged: ['+FLAGS', ['\\Flagged']],
           unflagged: ['-FLAGS', ['\\Flagged']],
         };
         const entry = MARK_MAP[args.mark];
         if (!entry) return err(-32602, 'Invalid mark value — must be read, unread, flagged, or unflagged');
         result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, entry[0], entry[1]);
-
       } else if (name === 'getthread') {
         if (!args.uid) return err(-32602, 'Missing uid');
         const folder = args.folder ?? 'INBOX';
-        const order  = args.order ?? 'asc';
+        const order = args.order ?? 'asc';
 
         // Fetch seed message headers to get its Message-ID and References chain
         const seed = await this.#imap.fetchHeaders(folder, args.uid);
-        const parseIds = s => (s || '').match(/<[^>]+>/g) || [];
-        const allIds = new Set(
-          [seed.messageId, ...parseIds(seed.references), ...parseIds(seed.inReplyTo)].filter(Boolean)
-        );
+        const parseIds = (s) => (s || '').match(/<[^>]+>/g) || [];
+        const allIds = new Set([seed.messageId, ...parseIds(seed.references), ...parseIds(seed.inReplyTo)].filter(Boolean));
 
         // Search the folder for each referenced Message-ID
         const threadUids = new Set([String(args.uid)]);
@@ -952,9 +955,8 @@ export class ImapSession {
         });
 
         result = { folder, threadSize: messages.length, messages };
-
       } else if (name === 'downloadattachment') {
-        if (!args.uid)      return err(-32602, 'Missing uid');
+        if (!args.uid) return err(-32602, 'Missing uid');
         if (!args.filename) return err(-32602, 'Missing filename');
         const folder = args.folder ?? 'INBOX';
         const MAX_BYTES = MAX_ATTACHMENT_BYTES;
@@ -962,15 +964,17 @@ export class ImapSession {
         const bsRaw = await this.#imap.fetchBodyStructure(folder, args.uid);
         const parts = parseBodyStructure(bsRaw);
 
-        const part = parts.find(p => p.filename === args.filename);
+        const part = parts.find((p) => p.filename === args.filename);
         if (!part) {
-          const available = parts.filter(p => p.filename).map(p => p.filename).join(', ') || 'none';
+          const available =
+            parts
+              .filter((p) => p.filename)
+              .map((p) => p.filename)
+              .join(', ') || 'none';
           return toolErr(`Attachment "${args.filename}" not found. Available: ${available}`);
         }
 
-        const decodedSize = part.encoding === 'base64'
-          ? Math.floor(part.size * 0.75)
-          : part.size;
+        const decodedSize = part.encoding === 'base64' ? Math.floor(part.size * 0.75) : part.size;
         if (decodedSize > MAX_BYTES) {
           return toolErr(`Attachment too large: ~${Math.round(decodedSize / 1024)}KB exceeds ${MAX_BYTES / (1024 * 1024)}MB limit`);
         }
@@ -986,7 +990,6 @@ export class ImapSession {
           size: bytes.length,
           content: uint8ToBase64(bytes),
         };
-
       } else if (name === 'bulkaction') {
         if (!Array.isArray(args.uids) || args.uids.length === 0) return err(-32602, 'Missing uids array');
         if (args.uids.length > 100) return err(-32602, 'Maximum 100 UIDs per bulkaction');
@@ -994,14 +997,17 @@ export class ImapSession {
         if (args.action === 'move' && !args.destination) return err(-32602, 'move action requires destination');
 
         let uidSeq;
-        try { uidSeq = buildUidSequence(args.uids); }
-        catch (e) { return err(-32602, e.message); }
+        try {
+          uidSeq = buildUidSequence(args.uids);
+        } catch (e) {
+          return err(-32602, e.message);
+        }
 
         const folder = args.folder ?? 'INBOX';
         const FLAG_MAP = {
-          read:   ['+FLAGS', ['\\Seen']],
+          read: ['+FLAGS', ['\\Seen']],
           unread: ['-FLAGS', ['\\Seen']],
-          flag:   ['+FLAGS', ['\\Flagged']],
+          flag: ['+FLAGS', ['\\Flagged']],
           unflag: ['-FLAGS', ['\\Flagged']],
         };
 
@@ -1018,32 +1024,29 @@ export class ImapSession {
         }
 
         result = { action: args.action, count: args.uids.length, uidSequence: uidSeq };
-
       } else if (name === 'getemailstatus') {
         if (!args.uid) return err(-32602, 'Missing uid');
         result = await this.#imap.fetchMessageStatus(args.folder ?? 'INBOX', args.uid);
-
       } else if (name === 'getemails') {
         if (!Array.isArray(args.uids) || args.uids.length === 0) return err(-32602, 'Missing uids array');
         if (args.uids.length > 100) return err(-32602, 'Maximum 100 UIDs per getemails');
         const folder = args.folder ?? 'INBOX';
         const raw = await this.#imap.fetchMultiple(folder, args.uids);
-        const emails = raw.map(msg => {
+        const emails = raw.map((msg) => {
           const h = parseHeaderBlock(msg.headerLiteral);
           return {
-            uid:         msg.uid,
-            from:        h['from']       || '',
-            to:          h['to']         || '',
-            subject:     h['subject']    || '',
-            date:        h['date']       || msg.internalDate || '',
-            messageId:   h['message-id'] || '',
-            flags:       msg.flags,
-            seen:        msg.flags.some(f => f.toLowerCase() === '\\seen'),
-            flagged:     msg.flags.some(f => f.toLowerCase() === '\\flagged'),
+            uid: msg.uid,
+            from: h['from'] || '',
+            to: h['to'] || '',
+            subject: h['subject'] || '',
+            date: h['date'] || msg.internalDate || '',
+            messageId: h['message-id'] || '',
+            flags: msg.flags,
+            seen: msg.flags.some((f) => f.toLowerCase() === '\\seen'),
+            flagged: msg.flags.some((f) => f.toLowerCase() === '\\flagged'),
           };
         });
         result = { folder, count: emails.length, emails };
-
       } else if (name === 'getfolderstats') {
         const folders = Array.isArray(args.folders) && args.folders.length ? args.folders : ['INBOX'];
         const stats = [];
@@ -1051,37 +1054,39 @@ export class ImapSession {
           stats.push(await this.#imap.getFolderStatus(f));
         }
         result = { stats };
-
       } else if (name === 'createfolder') {
         if (!args.name) return err(-32602, 'Missing name');
         result = await this.#imap.createFolder(args.name);
-
       } else if (name === 'renamefolder') {
-        if (!args.folder)  return err(-32602, 'Missing folder');
+        if (!args.folder) return err(-32602, 'Missing folder');
         if (!args.newName) return err(-32602, 'Missing newName');
         result = await this.#imap.renameFolder(args.folder, args.newName);
-
       } else if (name === 'deletefolder') {
         if (!args.folder) return err(-32602, 'Missing folder');
         result = await this.#imap.deleteFolder(args.folder);
-
       } else if (name === 'addlabel') {
-        if (!args.uid)   return err(-32602, 'Missing uid');
+        if (!args.uid) return err(-32602, 'Missing uid');
         if (!args.label) return err(-32602, 'Missing label');
         let label;
-        try { label = validateKeyword(args.label); } catch (e) { return err(-32602, e.message); }
+        try {
+          label = validateKeyword(args.label);
+        } catch (e) {
+          return err(-32602, e.message);
+        }
         result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '+FLAGS', [label]);
-
       } else if (name === 'removelabel') {
-        if (!args.uid)   return err(-32602, 'Missing uid');
+        if (!args.uid) return err(-32602, 'Missing uid');
         if (!args.label) return err(-32602, 'Missing label');
         let label;
-        try { label = validateKeyword(args.label); } catch (e) { return err(-32602, e.message); }
+        try {
+          label = validateKeyword(args.label);
+        } catch (e) {
+          return err(-32602, e.message);
+        }
         result = await this.#imap.storeFlags(args.folder ?? 'INBOX', args.uid, '-FLAGS', [label]);
-
       } else if (name === 'extractcontacts') {
-        const folder   = args.folder ?? 'INBOX';
-        const maxScan  = Math.min(args.limit ?? 100, 200);
+        const folder = args.folder ?? 'INBOX';
+        const maxScan = Math.min(args.limit ?? 100, 200);
         // Fetch recent UIDs (search ALL, take the last maxScan)
         const search = await this.#imap.searchMessages(folder, 'ALL');
         const uids = search.uids.slice(-maxScan);
@@ -1100,62 +1105,63 @@ export class ImapSession {
           .slice(0, 50)
           .map(([email, count]) => ({ email, count }));
         result = { scanned: raw.length, contacts };
-
       } else if (name === 'savedraft') {
-        if (!args.to)      return err(-32602, 'Missing to');
+        if (!args.to) return err(-32602, 'Missing to');
         if (!args.subject) return err(-32602, 'Missing subject');
         if (!hasMessageContent(args)) return err(-32602, 'Missing body or attachments');
-        const draftsFolder = args.folder ?? await this.#imap.findDraftsFolder();
+        const draftsFolder = args.folder ?? (await this.#imap.findDraftsFolder());
         const attachments = await this.#attachmentsFromArgs(args);
         const rawMsg = buildRawMessage({
-          from:    this.#smtpParams().from,
-          to:      args.to,
+          from: this.#smtpParams().from,
+          to: args.to,
           subject: args.subject,
-          body:    args.body,
+          body: args.body,
           htmlBody: args.htmlBody,
-          cc:      args.cc ?? null,
-          bcc:     args.bcc ?? null,
+          cc: args.cc ?? null,
+          bcc: args.bcc ?? null,
           attachments,
         });
         result = await this.#imap.appendMessage(draftsFolder, rawMsg, ['\\Draft']);
         result.draftsFolder = draftsFolder;
-
       } else if (name === 'senddraft') {
         if (!args.uid) return err(-32602, 'Missing uid');
-        const draftsFolder = args.folder ?? await this.#imap.findDraftsFolder();
+        const draftsFolder = args.folder ?? (await this.#imap.findDraftsFolder());
         const draft = await this.#imap.getRawMessage(draftsFolder, args.uid);
         if (draft.error) return toolErr('Could not fetch draft: ' + draft.error);
         const [headerRaw] = splitHeaderBody(draft.raw);
         const h = parseHeaderBlock(headerRaw);
         if (!h['to']) return toolErr('Draft has no To address');
-        const sendResult = await new SmtpClient().sendRaw({
-          ...this.#smtpParams(),
-          to: h['to'],
-          cc: h['cc'] || null,
-          bcc: h['bcc'] || null,
-          rawMessage: stripHeader(draft.raw, 'bcc'),
-        }, this.#credentials);
+        const sendResult = await new SmtpClient().sendRaw(
+          {
+            ...this.#smtpParams(),
+            to: h['to'],
+            cc: h['cc'] || null,
+            bcc: h['bcc'] || null,
+            rawMessage: stripHeader(draft.raw, 'bcc'),
+          },
+          this.#credentials,
+        );
         await this.#imap.deleteMessage(draftsFolder, args.uid);
         result = { sent: true, ...sendResult, deletedDraft: args.uid };
-
       } else if (name === 'listdrafts') {
-        const draftsFolder = args.folder ?? await this.#imap.findDraftsFolder();
+        const draftsFolder = args.folder ?? (await this.#imap.findDraftsFolder());
         const limit = Math.min(args.limit ?? 50, 200);
         const search = await this.#imap.searchMessages(draftsFolder, 'ALL');
         const uids = search.uids.slice(-limit);
         const raw = await this.#imap.fetchMultiple(draftsFolder, uids);
-        const drafts = raw.map(msg => {
-          const h = parseHeaderBlock(msg.headerLiteral);
-          return {
-            uid:     msg.uid,
-            to:      h['to']      || '',
-            subject: h['subject'] || '',
-            date:    h['date']    || msg.internalDate || '',
-            flags:   msg.flags,
-          };
-        }).reverse(); // most recent first
+        const drafts = raw
+          .map((msg) => {
+            const h = parseHeaderBlock(msg.headerLiteral);
+            return {
+              uid: msg.uid,
+              to: h['to'] || '',
+              subject: h['subject'] || '',
+              date: h['date'] || msg.internalDate || '',
+              flags: msg.flags,
+            };
+          })
+          .reverse(); // most recent first
         result = { folder: draftsFolder, count: drafts.length, drafts };
-
       } else {
         return err(-32601, 'Unknown tool: ' + name);
       }

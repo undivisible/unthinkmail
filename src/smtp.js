@@ -14,7 +14,10 @@ const envelopeAddr = (s) => {
 };
 
 // Sanitize a header value — strip CRLF to prevent header injection
-const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
+const sanitizeHeader = (s) =>
+  String(s)
+    .replace(/[\r\n]/g, '')
+    .trim();
 
 const b64utf8 = (s) => btoa(String.fromCharCode(...enc.encode(String(s))));
 
@@ -25,7 +28,7 @@ export class SmtpClient {
     const sig = signature || creds?.smtp_signature;
     const messageBody = String(body ?? '');
     const signedBody = sig ? `${messageBody}\r\n\r\n${sig}` : messageBody;
-    from    = sanitizeHeader(from);
+    from = sanitizeHeader(from);
     const { toList, ccList, bccList } = buildRecipientLists({ to, cc, bcc });
     subject = sanitizeHeader(subject);
 
@@ -56,7 +59,12 @@ export class SmtpClient {
     });
 
     await this.#sendMessage({ host, port, user, pass, fromAddr, toList, ccList: [...ccList, ...bccList], message });
-    return { sent: true, to: toList.join(', '), subject, attachments: normalizedAttachments.map(({ filename, mimeType, size }) => ({ filename, mimeType, size })) };
+    return {
+      sent: true,
+      to: toList.join(', '),
+      subject,
+      attachments: normalizedAttachments.map(({ filename, mimeType, size }) => ({ filename, mimeType, size })),
+    };
   }
 
   async sendRaw({ host, port, user, pass, from, to, cc, bcc, rawMessage }, creds) {
@@ -98,7 +106,8 @@ export class SmtpClient {
         const { done, value } = await state.reader.read();
         if (done) return dec.decode(state.buf).trim();
         const next = new Uint8Array(state.buf.length + value.length);
-        next.set(state.buf); next.set(value, state.buf.length);
+        next.set(state.buf);
+        next.set(value, state.buf.length);
         state.buf = next;
       }
     };
@@ -163,8 +172,11 @@ export class SmtpClient {
 
       // Dot-stuff lines starting with "." per RFC 5321
       const stuffed = String(message)
-        .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-        .split('\n').map(l => l.startsWith('.') ? '.' + l : l).join('\r\n');
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map((l) => (l.startsWith('.') ? '.' + l : l))
+        .join('\r\n');
 
       await write(`${stuffed}\r\n.\r\n`);
 
@@ -173,8 +185,12 @@ export class SmtpClient {
 
       await write('QUIT\r\n');
     } finally {
-      try { await state.writer.close(); } catch {}
-      try { state.reader.cancel(); } catch {}
+      try {
+        await state.writer.close();
+      } catch {}
+      try {
+        state.reader.cancel();
+      } catch {}
     }
   }
 }

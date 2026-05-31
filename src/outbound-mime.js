@@ -2,7 +2,10 @@ export const MAX_ATTACHMENTS = 25;
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
-const sanitizeHeader = (s) => String(s).replace(/[\r\n]/g, '').trim();
+const sanitizeHeader = (s) =>
+  String(s)
+    .replace(/[\r\n]/g, '')
+    .trim();
 
 const parseRecipients = (value) => {
   const raw = Array.isArray(value) ? value : String(value ?? '').split(',');
@@ -21,7 +24,7 @@ export const buildRecipientLists = ({ to, cc, bcc }) => {
   };
 };
 
-const base64ToBytes = (s) => Uint8Array.from(atob(String(s).replace(/\s/g, '')), c => c.charCodeAt(0));
+const base64ToBytes = (s) => Uint8Array.from(atob(String(s).replace(/\s/g, '')), (c) => c.charCodeAt(0));
 
 const textToBytes = (s) => new TextEncoder().encode(String(s));
 
@@ -34,7 +37,10 @@ const bytesToBase64 = (bytes) => {
   return btoa(s);
 };
 
-const foldBase64 = (s) => String(s).replace(/.{1,76}/g, '$&\r\n').trimEnd();
+const foldBase64 = (s) =>
+  String(s)
+    .replace(/.{1,76}/g, '$&\r\n')
+    .trimEnd();
 
 const asciiFilename = (s) => {
   const value = sanitizeHeader(s)
@@ -82,7 +88,7 @@ export function normalizeAttachments(attachments) {
       bytes = attachment.contentBytes ?? attachment.bytes;
     } else if (Array.isArray(attachment.contentBytes) || Array.isArray(attachment.bytes)) {
       const values = attachment.contentBytes ?? attachment.bytes;
-      if (!values.every(n => Number.isInteger(n) && n >= 0 && n <= 255)) {
+      if (!values.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
         throw new Error(`Attachment "${filename}" byte content must be integers from 0 to 255`);
       }
       bytes = Uint8Array.from(values);
@@ -110,16 +116,20 @@ export function normalizeAttachments(attachments) {
   });
 }
 
-const htmlToText = (html) => String(html)
-  .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-  .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-  .replace(/<br\s*\/?>/gi, '\n')
-  .replace(/<\/(?:p|div|tr|li|h[1-6])>/gi, '\n')
-  .replace(/<[^>]+>/g, '')
-  .replace(/&nbsp;/g, ' ')
-  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-  .replace(/\n{3,}/g, '\n\n')
-  .trim();
+const htmlToText = (html) =>
+  String(html)
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|tr|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
 const partText = (body) => `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${body}`;
 
@@ -127,10 +137,12 @@ const partHtml = (htmlBody) => `Content-Type: text/html; charset=utf-8\r\nConten
 
 const partAlternative = (body, htmlBody) => {
   const boundary = `unthinkmail-alt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `Content-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n` +
+  return (
+    `Content-Type: multipart/alternative; boundary="${boundary}"\r\n\r\n` +
     `--${boundary}\r\n${partText(body)}\r\n` +
     `--${boundary}\r\n${partHtml(htmlBody)}\r\n` +
-    `--${boundary}--`;
+    `--${boundary}--`
+  );
 };
 
 const bodyPart = (body, htmlBody) => {
@@ -142,26 +154,43 @@ const bodyPart = (body, htmlBody) => {
 
 const attachmentPart = (attachment) => {
   const contentId = attachment.contentId ? `Content-ID: <${attachment.contentId}>\r\n` : '';
-  return `Content-Type: ${attachment.mimeType}; name="${attachment.filename}"\r\n` +
+  return (
+    `Content-Type: ${attachment.mimeType}; name="${attachment.filename}"\r\n` +
     `Content-Disposition: ${attachment.disposition}; filename="${attachment.filename}"\r\n${contentId}` +
-    `Content-Transfer-Encoding: base64\r\n\r\n${attachment.base64}`;
+    `Content-Transfer-Encoding: base64\r\n\r\n${attachment.base64}`
+  );
 };
 
 const relatedPart = (body, htmlBody, inlineAttachments) => {
   const boundary = `unthinkmail-related-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `Content-Type: multipart/related; boundary="${boundary}"\r\n\r\n` +
+  return (
+    `Content-Type: multipart/related; boundary="${boundary}"\r\n\r\n` +
     `--${boundary}\r\n${bodyPart(body, htmlBody)}\r\n` +
-    inlineAttachments.map(attachment => `--${boundary}\r\n${attachmentPart(attachment)}\r\n`).join('') +
-    `--${boundary}--`;
+    inlineAttachments.map((attachment) => `--${boundary}\r\n${attachmentPart(attachment)}\r\n`).join('') +
+    `--${boundary}--`
+  );
 };
 
-export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, bcc, includeBccHeader = false, extraHeaders = {}, replyTo, attachments, normalizedAttachments }) {
+export function buildMimeMessage({
+  from,
+  to,
+  subject,
+  body,
+  htmlBody,
+  cc,
+  bcc,
+  includeBccHeader = false,
+  extraHeaders = {},
+  replyTo,
+  attachments,
+  normalizedAttachments,
+}) {
   const { toList, ccList, bccList } = buildRecipientLists({ to, cc, bcc });
   const safeFrom = sanitizeHeader(from);
   const safeSubject = sanitizeHeader(subject);
   const attachmentList = normalizedAttachments ?? normalizeAttachments(attachments);
-  const inlineAttachments = htmlBody != null ? attachmentList.filter(a => a.disposition === 'inline' && a.contentId) : [];
-  const fileAttachments = attachmentList.filter(a => !(htmlBody != null && a.disposition === 'inline' && a.contentId));
+  const inlineAttachments = htmlBody != null ? attachmentList.filter((a) => a.disposition === 'inline' && a.contentId) : [];
+  const fileAttachments = attachmentList.filter((a) => !(htmlBody != null && a.disposition === 'inline' && a.contentId));
   const toHeader = toList.join(', ');
   const ccHeader = ccList.length ? `Cc: ${ccList.join(', ')}\r\n` : '';
   const bccHeader = includeBccHeader && bccList.length ? `Bcc: ${bccList.join(', ')}\r\n` : '';
@@ -172,25 +201,28 @@ export function buildMimeMessage({ from, to, subject, body, htmlBody, cc, bcc, i
   const replyToHeader = replyTo ? `Reply-To: ${sanitizeHeader(replyTo)}\r\n` : '';
 
   if (attachmentList.length === 0 && htmlBody == null) {
-    return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
+    return (
+      `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
       `Subject: ${safeSubject}\r\n${replyToHeader}${extraLines}` +
       `MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
-      String(body ?? '');
+      String(body ?? '')
+    );
   }
 
-  let content = inlineAttachments.length
-    ? relatedPart(body, htmlBody, inlineAttachments)
-    : bodyPart(body, htmlBody);
+  let content = inlineAttachments.length ? relatedPart(body, htmlBody, inlineAttachments) : bodyPart(body, htmlBody);
 
   if (fileAttachments.length) {
     const boundary = `unthinkmail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    content = `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n` +
+    content =
+      `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n` +
       `--${boundary}\r\n${content}\r\n` +
-      fileAttachments.map(attachment => `--${boundary}\r\n${attachmentPart(attachment)}\r\n`).join('') +
+      fileAttachments.map((attachment) => `--${boundary}\r\n${attachmentPart(attachment)}\r\n`).join('') +
       `--${boundary}--`;
   }
 
-  return `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
+  return (
+    `From: ${safeFrom}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}` +
     `Subject: ${safeSubject}\r\n${replyToHeader}${extraLines}` +
-    `MIME-Version: 1.0\r\n${content}`;
+    `MIME-Version: 1.0\r\n${content}`
+  );
 }
