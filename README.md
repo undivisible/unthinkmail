@@ -27,6 +27,23 @@ The key contains your credentials so the server can connect to your mailbox with
 | `sendemail` | Send a new email |
 | `sendemailfromurls` | Send a new email with attachments fetched from public HTTPS URLs |
 | `replyemail` | Reply to an existing message |
+| `markmessage` | Mark a message as read, unread, flagged, or unflagged |
+| `forwardemail` | Forward an existing message to one or more recipients |
+| `getthread` | Reconstruct a conversation thread from Message-ID and References headers |
+| `downloadattachment` | Download a named attachment from a message as base64 content |
+| `bulkaction` | Apply mark, delete, or move actions to multiple messages |
+| `getemailstatus` | Fetch flags and size for a message without downloading its body |
+| `getemails` | Fetch header summaries for multiple messages |
+| `getfolderstats` | Get total, unseen, and recent counts for folders |
+| `createfolder` | Create a new mail folder |
+| `renamefolder` | Rename an existing mail folder |
+| `deletefolder` | Permanently delete a mail folder and its messages |
+| `addlabel` | Add an IMAP keyword label to a message |
+| `removelabel` | Remove an IMAP keyword label from a message |
+| `extractcontacts` | Extract frequent email contacts from recent messages |
+| `savedraft` | Save a message to the Drafts folder |
+| `senddraft` | Send a saved draft and delete it afterward |
+| `listdrafts` | List saved drafts |
 
 Outgoing tools that send mail accept `to`, `cc`, and `bcc` as a single address, comma-separated addresses, or an array of addresses. `sendemail` also accepts `recipients` for personalized sends: each recipient entry has `to`, optional `cc`/`bcc`, and `variables`; placeholders like `{name}` in `subject`, `body`, and `htmlBody` are rendered per recipient. They also accept optional `attachments`: an array of `{ filename, mimeType, content }`, where `content` is base64-encoded file content. They also accept `contentText`, `contentBytes`, or `contentDataUrl` so clients can provide raw text, byte arrays, or data URLs and let the server encode them. When files are hosted, prefer `sendemailfromurls` or `attachmentUrls`; the server fetches public HTTPS URLs and encodes them before sending. Limits are 25 attachments per email, 10 MB per attachment, and 20 MB total. Use ASCII filenames; non-ASCII names are normalized because outbound MIME filename encoding is not emitted yet. HTML email uses `htmlBody`; inline images use `htmlBody` references like `cid:logo` plus an attachment with `contentId: "logo"` and `inline: true`.
 
