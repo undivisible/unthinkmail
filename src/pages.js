@@ -48,6 +48,7 @@ const FOOTER_LINKS = `
 const HUB_SCRIPT = `
 function hub() {
   return {
+    presetNames: ${JSON.stringify(PRESET_NAMES)},
     // form state
     f: {
       imapHost: '', imapPort: '993',
@@ -183,7 +184,7 @@ export const HUB = `<!DOCTYPE html>
   <!-- Provider presets -->
   <div class="flex gap-2 mb-5 flex-wrap">
     <span class="text-xs text-dim self-center">quick fill:</span>
-    <template x-for="p in ${JSON.stringify(PRESET_NAMES)}">
+    <template x-for="p in presetNames">
       <button @click="preset(p)"
         class="text-xs border border-border text-dim px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
         x-text="p"></button>
