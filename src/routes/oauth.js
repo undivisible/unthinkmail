@@ -319,6 +319,7 @@ const OAUTH_SCRIPT = `
 function oauthForm() {
   return {
     presetNames: ${JSON.stringify(PRESET_NAMES)},
+    providerPresets: ${JSON.stringify(PROVIDER_PRESETS)},
     f: { 
       imapHost: '', imapPort: '993', 
       smtpHost: '', smtpPort: '587', 
@@ -337,7 +338,7 @@ function oauthForm() {
     },
 
     preset(p) {
-      const r = PROVIDER_PRESETS[p]; if (!r) return;
+      const r = this.providerPresets[p]; if (!r) return;
       this.f.imapHost = r.ih; this.f.imapPort = r.ip;
       this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
       this.providerNote = r.note;

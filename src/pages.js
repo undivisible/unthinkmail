@@ -49,6 +49,7 @@ const HUB_SCRIPT = `
 function hub() {
   return {
     presetNames: ${JSON.stringify(PRESET_NAMES)},
+    providerPresets: ${JSON.stringify(PROVIDER_PRESETS)},
     // form state
     f: {
       imapHost: '', imapPort: '993',
@@ -75,7 +76,7 @@ function hub() {
 
     // Populate from a known provider preset
     preset(p) {
-      const r = PROVIDER_PRESETS[p]; if (!r) return;
+      const r = this.providerPresets[p]; if (!r) return;
       this.f.imapHost = r.ih; this.f.imapPort = r.ip;
       this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
       this.providerNote = r.note;
