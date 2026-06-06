@@ -1,3 +1,5 @@
+import { PRESET_NAMES, PROVIDER_GUIDE_HTML, PROVIDER_PRESETS } from './provider-content.js';
+
 // Hub and landing page HTML
 // Single page — no accounts, no login. Enter creds, get a key.
 
@@ -72,13 +74,7 @@ function hub() {
 
     // Populate from a known provider preset
     preset(p) {
-      const presets = {
-        purelymail: { ih: 'imap.purelymail.com', ip: '993', sh: 'smtp.purelymail.com', sp: '587', note: 'Use your email password' },
-        gmail:      { ih: 'imap.gmail.com',       ip: '993', sh: 'smtp.gmail.com',      sp: '587', note: 'Requires app password (see below)' },
-        outlook:    { ih: 'outlook.office365.com', ip: '993', sh: 'smtp.office365.com', sp: '587', note: 'Use your email password' },
-        fastmail:   { ih: 'imap.fastmail.com',     ip: '993', sh: 'smtp.fastmail.com',  sp: '465', note: 'Use your password or app password' },
-      };
-      const r = presets[p]; if (!r) return;
+      const r = PROVIDER_PRESETS[p]; if (!r) return;
       this.f.imapHost = r.ih; this.f.imapPort = r.ip;
       this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
       this.providerNote = r.note;
@@ -166,59 +162,7 @@ const ABOUT_SECTION = `
       </div>
 
       <div class="border-t border-border"></div>
-
-      <div>
-        <p class="text-body text-xs font-medium mb-1">gmail app password setup</p>
-        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
-          <li>go to your google account → security</li>
-          <li>enable 2-step verification if not already on</li>
-          <li>search for "app passwords" or go to → app passwords</li>
-          <li>create a new app password named "unthinkmail"</li>
-          <li>use this 16-character password in the form above (not your regular gmail password)</li>
-        </ol>
-        <p class="text-dim text-xs mt-2">smtp uses port 587 (submission with tls). imap uses port 993.</p>
-      </div>
-
-      <div class="border-t border-border"></div>
-
-      <div>
-        <p class="text-body text-xs font-medium mb-1">outlook / office 365</p>
-        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
-          <li>sign in to your microsoft account</li>
-          <li>if using 2fa, go to security → app passwords</li>
-          <li>create a new app password for unthinkmail</li>
-          <li>use this password in the form above</li>
-        </ol>
-        <p class="text-dim text-xs mt-2">settings: imap.outlook.office365.com:993, smtp.office365.com:587 (tls). use your full email as username.</p>
-      </div>
-
-      <div class="border-t border-border"></div>
-
-      <div>
-        <p class="text-body text-xs font-medium mb-1">fastmail</p>
-        <ol class="text-dim space-y-1 list-decimal list-inside text-xs">
-          <li>go to fastmail → settings → security</li>
-          <li>scroll to "app passwords" and create a new one</li>
-          <li>name it "unthinkmail" and copy the password</li>
-          <li>use this password in the form above</li>
-        </ol>
-        <p class="text-dim text-xs mt-2">settings: imap.fastmail.com:993 (ssl), smtp.fastmail.com:465 (ssl) or 587 (starttls). use your full email as username.</p>
-      </div>
-
-      <div class="border-t border-border"></div>
-
-      <div>
-        <p class="text-body text-xs font-medium mb-1">purelymail</p>
-        <p class="text-dim text-xs">if you have 2fa enabled on your purelymail account, generate an app password in your account settings and use that. otherwise, use your regular password.</p>
-        <p class="text-dim text-xs mt-2">settings: imap.purelymail.com:993 (ssl), smtp.purelymail.com:587 (starttls).</p>
-      </div>
-
-      <div class="border-t border-border"></div>
-
-      <div>
-        <p class="text-body text-xs font-medium mb-1">security</p>
-        <p class="text-dim">your credentials are never stored — they're encoded into the access token itself and decrypted per-request. use an app-specific password if your provider supports it (gmail, outlook, fastmail all do). to revoke access, just disable the app password at your email provider.</p>
-      </div>
+${PROVIDER_GUIDE_HTML}
     </div>
   </div>`;
 
@@ -239,7 +183,7 @@ export const HUB = `<!DOCTYPE html>
   <!-- Provider presets -->
   <div class="flex gap-2 mb-5 flex-wrap">
     <span class="text-xs text-dim self-center">quick fill:</span>
-    <template x-for="p in ['purelymail','gmail','outlook','fastmail']">
+    <template x-for="p in ${JSON.stringify(PRESET_NAMES)}">
       <button @click="preset(p)"
         class="text-xs border border-border text-dim px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
         x-text="p"></button>

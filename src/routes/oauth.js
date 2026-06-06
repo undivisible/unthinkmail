@@ -5,6 +5,7 @@
 
 import { encodeKey } from '../lib/crypto.js';
 import { json } from '../index.js';
+import { PRESET_NAMES, PROVIDER_GUIDE_HTML, PROVIDER_PRESETS } from '../provider-content.js';
 
 const enc = new TextEncoder();
 
@@ -12,7 +13,9 @@ function b64url(buf) {
   if (typeof buf === 'string') buf = enc.encode(buf);
   if (buf instanceof ArrayBuffer) buf = new Uint8Array(buf);
   return btoa(String.fromCharCode(...buf))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 }
 
 function fromB64url(s) {
@@ -43,7 +46,7 @@ async function hmacVerify(payload, sig, secret) {
 function b64urlToBytes(s) {
   let b = s.replace(/-/g, '+').replace(/_/g, '/');
   while (b.length % 4) b += '=';
-  return Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  return Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
 }
 
 function oauthError(error, description) {
@@ -102,15 +105,18 @@ export async function handleOAuthRegister(request) {
   const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
   const clientId = b64url(enc.encode(JSON.stringify(uris.sort())));
   console.log('[oauth] register redirect_uris=%j client_id_prefix=%s', uris, clientId.slice(0, 12));
-  return json({
-    client_id: clientId,
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    redirect_uris: uris,
-    grant_types: ['authorization_code'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'none',
-    scope: 'email',
-  }, 201);
+  return json(
+    {
+      client_id: clientId,
+      client_id_issued_at: Math.floor(Date.now() / 1000),
+      redirect_uris: uris,
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: 'email',
+    },
+    201,
+  );
 }
 
 // GET /oauth/authorize — show credentials form
@@ -120,9 +126,10 @@ export async function handleOAuthAuthorize(request, env) {
 
   if (request.method === 'GET') {
     const p = Object.fromEntries(url.searchParams);
-    console.log('[oauth] authorize GET client_id_prefix=%s redirect_uri=%s has_challenge=%s',
-      p.client_id?.slice(0, 12), p.redirect_uri, !!p.code_challenge);
-    return new Response(oauthForm(p, null), { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    console.log('[oauth] authorize GET client_id_prefix=%s redirect_uri=%s has_challenge=%s', p.client_id?.slice(0, 12), p.redirect_uri, !!p.code_challenge);
+    return new Response(oauthForm(p, null), {
+      headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+    });
   }
 
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -174,12 +181,12 @@ export async function handleOAuthAuthorize(request, env) {
     });
   }
 
-  const creds = { 
-    imap_host: imapHost, 
-    imap_port: imapPort, 
-    imap_user: imapUser, 
-    imap_pass: imapPass, 
-    smtp_host: smtpHost, 
+  const creds = {
+    imap_host: imapHost,
+    imap_port: imapPort,
+    imap_user: imapUser,
+    imap_pass: imapPass,
+    smtp_host: smtpHost,
     smtp_port: smtpPort,
     smtp_from_email: smtpFromEmail,
     smtp_from_name: smtpFromName,
@@ -217,11 +224,17 @@ export async function handleOAuthToken(request, env) {
   console.log('[oauth] token request ct=%s', ct);
   if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
     const form = await request.formData().catch(() => null);
-    if (!form) { console.log('[oauth] token: formData parse failed'); return oauthError('invalid_request', 'Invalid form data'); }
+    if (!form) {
+      console.log('[oauth] token: formData parse failed');
+      return oauthError('invalid_request', 'Invalid form data');
+    }
     body = Object.fromEntries(form);
   } else {
     body = await request.json().catch(() => null);
-    if (!body) { console.log('[oauth] token: json parse failed'); return oauthError('invalid_request', 'Invalid request body'); }
+    if (!body) {
+      console.log('[oauth] token: json parse failed');
+      return oauthError('invalid_request', 'Invalid request body');
+    }
   }
 
   console.log('[oauth] token grant_type=%s has_code=%s has_verifier=%s', body.grant_type, !!body.code, !!body.code_verifier);
@@ -233,12 +246,18 @@ export async function handleOAuthToken(request, env) {
   if (!code_verifier) return oauthError('invalid_request', 'Missing code_verifier');
 
   const dotIdx = code.lastIndexOf('.');
-  if (dotIdx < 1) { console.log('[oauth] token: bad code format'); return oauthError('invalid_grant'); }
+  if (dotIdx < 1) {
+    console.log('[oauth] token: bad code format');
+    return oauthError('invalid_grant');
+  }
   const payload = code.slice(0, dotIdx);
   const sig = code.slice(dotIdx + 1);
 
   const valid = await hmacVerify(payload, sig, oauthSecret);
-  if (!valid) { console.log('[oauth] token: HMAC invalid'); return oauthError('invalid_grant'); }
+  if (!valid) {
+    console.log('[oauth] token: HMAC invalid');
+    return oauthError('invalid_grant');
+  }
 
   let data;
   try {
@@ -248,7 +267,10 @@ export async function handleOAuthToken(request, env) {
     return oauthError('invalid_grant');
   }
 
-  if (Date.now() > data.exp) { console.log('[oauth] token: code expired'); return oauthError('invalid_grant', 'Code expired'); }
+  if (Date.now() > data.exp) {
+    console.log('[oauth] token: code expired');
+    return oauthError('invalid_grant', 'Code expired');
+  }
 
   if (redirect_uri && redirect_uri !== data.ru) {
     console.log('[oauth] token: redirect_uri mismatch got=%s want=%s', redirect_uri, data.ru);
@@ -314,13 +336,7 @@ function oauthForm() {
     },
 
     preset(p) {
-      const presets = {
-        purelymail: { ih: 'imap.purelymail.com', ip: '993', sh: 'smtp.purelymail.com', sp: '587', note: 'Use your email password' },
-        gmail:      { ih: 'imap.gmail.com',       ip: '993', sh: 'smtp.gmail.com',      sp: '587', note: 'Requires app password (see below)' },
-        outlook:    { ih: 'outlook.office365.com', ip: '993', sh: 'smtp.office365.com', sp: '587', note: 'Use your email password' },
-        fastmail:   { ih: 'imap.fastmail.com',     ip: '993', sh: 'smtp.fastmail.com',  sp: '465', note: 'Use your password or app password' },
-      };
-      const r = presets[p]; if (!r) return;
+      const r = PROVIDER_PRESETS[p]; if (!r) return;
       this.f.imapHost = r.ih; this.f.imapPort = r.ip;
       this.f.smtpHost = r.sh; this.f.smtpPort = r.sp;
       this.providerNote = r.note;
@@ -331,7 +347,11 @@ function oauthForm() {
 }`;
 
 function oauthForm(params, error) {
-  const h = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const h = (s) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
   const { redirect_uri = '', state = '', code_challenge = '', code_challenge_method = 'S256', client_id = '' } = params;
 
   return `<!DOCTYPE html>
@@ -368,7 +388,7 @@ function oauthForm(params, error) {
 
     <div class="flex gap-2 mb-5 flex-wrap">
       <span class="text-xs text-dim self-center">quick fill:</span>
-      <template x-for="p in ['purelymail','gmail','outlook','fastmail']">
+      <template x-for="p in ${JSON.stringify(PRESET_NAMES)}">
         <button type="button" @click="preset(p)"
           class="text-xs border border-border text-dim px-2.5 py-1 rounded hover:text-body hover:border-dim transition-colors"
           x-text="p"></button>
@@ -458,6 +478,13 @@ function oauthForm(params, error) {
     </div>
 
     <p class="text-xs text-dim mt-4 text-center">your credentials are never stored — they become the access token itself.</p>
+
+    <details class="mt-6 bg-surface border border-border rounded-lg p-4 text-xs text-sub">
+      <summary class="cursor-pointer text-dim">provider setup instructions</summary>
+      <div class="mt-4 space-y-4 text-xs text-sub">
+${PROVIDER_GUIDE_HTML}
+      </div>
+    </details>
 
     <div class="mt-8 text-xs text-dim space-x-3 text-center">
       <a href="https://undivisible.dev" class="hover:text-sub transition-colors">undivisible.dev</a>

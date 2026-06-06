@@ -174,8 +174,8 @@ bun run dev
 - Credentials are carried in the access token so there is no server-side credential storage. Configure `OAUTH_SECRET` so new tokens are encrypted at rest.
 - Each credential set gets its own Durable Object instance
 - IMAP/SMTP connections use native TLS via cloudflare:sockets
-- Use an **app-specific password** if your provider supports it (Gmail, Outlook, Fastmail all do). To revoke access, disable the app password at your provider.
+- Use an **app-specific password** if your provider supports it (Gmail, Outlook, Fastmail, and iCloud all do). To revoke access, disable the app password at your provider.
 
 ## Supported providers
 
-Any IMAP/SMTP provider works. Quick-fill presets on the hub: Purelymail, Gmail, Outlook, Fastmail.
+Any IMAP/SMTP provider works. Quick-fill presets on the hub: Purelymail, Gmail, Outlook, Fastmail, iCloud.
