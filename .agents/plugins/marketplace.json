@@ -1,0 +1,20 @@
+{
+  "name": "unthinkmail",
+  "interface": {
+    "displayName": "Unthinkmail"
+  },
+  "plugins": [
+    {
+      "name": "unthinkmail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/unthinkmail"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

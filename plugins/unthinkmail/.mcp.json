@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "unthinkmail": {
+      "transport": "streamable_http",
+      "url": "https://unthinkmail.undivisible.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ${UNTHINKMAIL_KEY}"
+      }
+    }
+  }
+}

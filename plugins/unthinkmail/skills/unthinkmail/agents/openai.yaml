@@ -1,0 +1,15 @@
+interface:
+  display_name: "Unthinkmail"
+  short_description: "Use the Unthinkmail email MCP server"
+  default_prompt: "Use $unthinkmail to search recent email."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "unthinkmail"
+      description: "Hosted Unthinkmail email MCP server"
+      transport: "streamable_http"
+      url: "https://unthinkmail.undivisible.dev/mcp"
+
+policy:
+  allow_implicit_invocation: true

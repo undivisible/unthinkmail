@@ -1,0 +1,42 @@
+{
+  "name": "unthinkmail",
+  "version": "0.1.0",
+  "description": "Use the hosted Unthinkmail MCP server to work with an email inbox through IMAP and SMTP.",
+  "author": {
+    "name": "Undivisible",
+    "email": "support@undivisible.dev",
+    "url": "https://unthinkmail.undivisible.dev"
+  },
+  "homepage": "https://unthinkmail.undivisible.dev",
+  "repository": "https://github.com/undivisible/unthinkmail",
+  "license": "MIT",
+  "keywords": [
+    "email",
+    "mcp",
+    "imap",
+    "smtp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Unthinkmail",
+    "shortDescription": "Use email through the Unthinkmail MCP server.",
+    "longDescription": "Connect Codex to Unthinkmail's hosted MCP endpoint for inbox search, message reads, folder listing, message moves, deletion, replies, and outbound email.",
+    "developerName": "Undivisible",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://unthinkmail.undivisible.dev",
+    "privacyPolicyURL": "https://unthinkmail.undivisible.dev",
+    "termsOfServiceURL": "https://unthinkmail.undivisible.dev",
+    "defaultPrompt": [
+      "Use Unthinkmail to search my recent email.",
+      "Find messages from a sender in my inbox.",
+      "Draft a reply with Unthinkmail."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
