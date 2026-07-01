@@ -636,16 +636,18 @@ export class ImapSession {
   }
 
   async fetch(request) {
-    return this.state.blockConcurrencyWhile(async () => {
-      if (request.method === 'GET') {
-        return Response.json({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' });
-      }
+    const url = new URL(request.url);
+    if (url.pathname === '/oauth-code/use') return this.#useOAuthCode(request);
+    if (request.method === 'GET') {
+      return Response.json({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' });
+    }
 
-      const body = await request.json().catch(() => null);
-      if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
+    const body = await request.json().catch(() => null);
+    if (!body) return Response.json({ error: 'Invalid JSON' }, { status: 400 });
 
-      // Update credentials if provided (injected by mcp.js Worker, not from clients)
-      if (body._credentials) {
+    // Update credentials if provided (injected by mcp.js Worker, not from clients)
+    if (body._credentials) {
+      await this.state.blockConcurrencyWhile(async () => {
         const creds = body._credentials;
         const changed =
           !this.#credentials ||
@@ -654,10 +656,23 @@ export class ImapSession {
           this.#credentials.imap_port !== creds.imap_port;
         if (changed) await this.#disconnect();
         this.#credentials = creds;
-      }
+      });
+    }
 
-      const response = await this.#handleRpc(body);
-      return Response.json(response);
+    const response = await this.#handleRpc(body);
+    return Response.json(response);
+  }
+
+  async #useOAuthCode(request) {
+    return this.state.blockConcurrencyWhile(async () => {
+      const body = await request.json().catch(() => null);
+      const hash = String(body?.hash ?? '');
+      const exp = Number(body?.exp ?? 0);
+      if (!hash || !exp) return Response.json({ error: 'Invalid code' }, { status: 400 });
+      const key = `oauth-code:${hash}`;
+      if (await this.state.storage.get(key)) return Response.json({ error: 'Code already used' }, { status: 409 });
+      await this.state.storage.put(key, Date.now(), { expiration: Math.ceil(exp / 1000) });
+      return Response.json({ used: true });
     });
   }
 

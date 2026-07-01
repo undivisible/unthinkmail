@@ -38,6 +38,20 @@ test('fetchUrlAttachments rejects non-HTTPS URLs', async () => {
   await expect(fetchUrlAttachments(['http://files.example.com/report.pdf'], async () => new Response('x'))).rejects.toThrow('https');
 });
 
+test('fetchUrlAttachments rejects local and private hosts', async () => {
+  await expect(fetchUrlAttachments(['https://localhost/report.pdf'], async () => new Response('x'))).rejects.toThrow('not allowed');
+  await expect(fetchUrlAttachments(['https://192.168.1.10/report.pdf'], async () => new Response('x'))).rejects.toThrow('not allowed');
+});
+
+test('fetchUrlAttachments passes an abort signal to fetcher', async () => {
+  let sawSignal = false;
+  await fetchUrlAttachments(['https://files.example.com/report.pdf'], async (_url, init) => {
+    sawSignal = init?.signal instanceof AbortSignal;
+    return new Response('hello', { headers: { 'content-type': 'text/plain' } });
+  });
+  expect(sawSignal).toBe(true);
+});
+
 test('fetchUrlAttachments rejects oversized content length', async () => {
   await expect(
     fetchUrlAttachments(

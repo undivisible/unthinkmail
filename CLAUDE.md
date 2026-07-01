@@ -25,10 +25,10 @@ Package manager: **Bun only** (never npm/yarn/pnpm).
 
 ### Key system (`src/lib/crypto.js`)
 
-New keys are **AES-GCM encrypted credential tokens** when `OAUTH_SECRET` is configured. Legacy `um_` base64url(JSON credentials) keys are still accepted for compatibility. There is no server-side credential storage; to revoke, disable the app password at the email provider.
+New keys are **AES-GCM encrypted credential tokens** and require `OAUTH_SECRET`. Legacy `um_` base64url(JSON credentials) keys are still accepted for compatibility. There is no server-side credential storage; to revoke, disable the app password at the email provider.
 
 ```js
-encodeKey(creds, secret?)   // → 'um2_...' with secret, legacy 'um_...' without
+encodeKey(creds, secret)    // → 'um2_...'
 decodeKey(token, secret?)   // → credentials object
 credHash(creds)    // → SHA-256 hex (stable Durable Object ID)
 ```
@@ -46,9 +46,9 @@ Endpoints:
 | `/oauth/authorize` | POST | Validate creds → signed auth code → redirect |
 | `/oauth/token` | POST | PKCE-verify code → return `um_` key as access_token |
 
-Auth codes are HMAC-signed self-contained tokens (no KV needed). `OAUTH_SECRET` is a static signing key set via Wrangler secrets and is also used to encrypt new access tokens.
+Auth codes are HMAC-signed tokens marked used in Durable Object storage. `OAUTH_SECRET` is a static signing key set via Wrangler secrets and is also used to encrypt new access tokens.
 
-Client IDs are deterministic (base64url of sorted redirect_uris) — no client registration storage needed.
+Client IDs are deterministic (base64url of sorted redirect_uris).
 
 ### Durable Objects
 

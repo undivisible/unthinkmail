@@ -133,7 +133,7 @@ const ABOUT_SECTION = `
   <div class="mt-6">
     <button @click="showAbout = !showAbout"
       class="w-full text-xs text-dim border border-border rounded-md py-2 hover:text-sub hover:border-dim transition-colors flex items-center justify-center gap-2">
-      <span x-text="showAbout ? 'hide setup guide' : 'how to connect to your ai'"></span>
+      <span x-text="showAbout ? 'hide about + setup guide' : 'about this service + setup guide'"></span>
       <span x-text="showAbout ? '↑' : '↓'" class="text-muted"></span>
     </button>
 

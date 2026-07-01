@@ -24,6 +24,16 @@ const filenameFromUrl = (url) => {
   return name || 'attachment';
 };
 
+const privateHost = (hostname) => {
+  const h = hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost') || h === '[::1]') return true;
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+};
+
 const readBytes = async (response, maxBytes) => {
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -59,11 +69,20 @@ export async function fetchUrlAttachments(urlAttachments, fetcher = fetch) {
     if (!source || typeof source !== 'object') throw new Error('URL attachment must be a URL string or object');
     const url = new URL(String(source.url || ''));
     if (url.protocol !== 'https:') throw new Error(`Attachment URL must use https: ${url.href}`);
-    const response = await fetcher(url.href);
+    if (privateHost(url.hostname)) throw new Error(`Attachment URL host is not allowed: ${url.hostname}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetcher(url.href, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) throw new Error(`Attachment fetch failed ${response.status}: ${url.href}`);
     if (response.url) {
       const finalUrl = new URL(response.url);
       if (finalUrl.protocol !== 'https:') throw new Error(`Attachment redirect must stay on https: ${url.href}`);
+      if (privateHost(finalUrl.hostname)) throw new Error(`Attachment redirect host is not allowed: ${finalUrl.hostname}`);
     }
     const length = parseInt(response.headers.get('content-length') || '0', 10);
     if (length > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment exceeds ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB limit: ${url.href}`);

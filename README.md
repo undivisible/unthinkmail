@@ -9,11 +9,11 @@ unthinkmail connects to your existing email account over IMAP and exposes it as 
 ## How it works
 
 1. Enter your IMAP/SMTP credentials on the hub
-2. Get an encrypted API key (`um_...`) or use OAuth
+2. Get an encrypted API key or use OAuth
 3. Point your AI client at `https://unthinkmail.undivisible.dev/mcp` with `Authorization: Bearer <your key>`
 4. Your AI can now search, read, move, and delete mail
 
-The key contains your credentials so the server can connect to your mailbox without storing anything. When `OAUTH_SECRET` is configured, new keys are encrypted with AES-GCM; legacy base64url `um_` keys are still accepted for compatibility.
+The key contains your credentials so the server can connect to your mailbox without storing anything. `OAUTH_SECRET` is required for new keys, which are encrypted with AES-GCM; legacy base64url `um_` keys are still accepted for compatibility.
 
 ## Tools exposed
 
@@ -45,7 +45,7 @@ The key contains your credentials so the server can connect to your mailbox with
 | `senddraft` | Send a saved draft and delete it afterward |
 | `listdrafts` | List saved drafts |
 
-Outgoing tools that send mail accept `to`, `cc`, and `bcc` as a single address, comma-separated addresses, or an array of addresses. `sendemail` also accepts `recipients` for personalized sends: each recipient entry has `to`, optional `cc`/`bcc`, and `variables`; placeholders like `{name}` in `subject`, `body`, and `htmlBody` are rendered per recipient. They also accept optional `attachments`: an array of `{ filename, mimeType, content }`, where `content` is base64-encoded file content. They also accept `contentText`, `contentBytes`, or `contentDataUrl` so clients can provide raw text, byte arrays, or data URLs and let the server encode them. When files are hosted, prefer `sendemailfromurls` or `attachmentUrls`; the server fetches public HTTPS URLs and encodes them before sending. Limits are 25 attachments per email, 10 MB per attachment, and 20 MB total. Use ASCII filenames; non-ASCII names are normalized because outbound MIME filename encoding is not emitted yet. HTML email uses `htmlBody`; inline images use `htmlBody` references like `cid:logo` plus an attachment with `contentId: "logo"` and `inline: true`.
+Outgoing tools that send mail accept `to`, `cc`, and `bcc` as a single address, comma-separated addresses, or an array of addresses. `sendemail` also accepts `recipients` for personalized sends: each recipient entry has `to`, optional `cc`/`bcc`, and `variables`; placeholders like `{name}` in `subject`, `body`, and `htmlBody` are rendered per recipient. They also accept optional `attachments`: an array of `{ filename, mimeType, content }`, where `content` is base64-encoded file content. They also accept `contentText`, `contentBytes`, or `contentDataUrl` so clients can provide raw text, byte arrays, or data URLs and let the server encode them. When files are hosted, prefer `sendemailfromurls` or `attachmentUrls`; the server fetches public HTTPS URLs and encodes them before sending. Local/private hosts are rejected. Limits are 25 attachments per email, 10 MB per attachment, and 20 MB total. Use ASCII filenames; non-ASCII names are normalized because outbound MIME filename encoding is not emitted yet. HTML email uses `htmlBody`; inline images use `htmlBody` references like `cid:logo` plus an attachment with `contentId: "logo"` and `inline: true`.
 
 Example personalized send:
 
@@ -151,7 +151,7 @@ bun run dev
 
 ## Security
 
-- Credentials are carried in the access token so there is no server-side credential storage. Configure `OAUTH_SECRET` so new tokens are encrypted at rest.
+- Credentials are carried in the access token so there is no server-side credential storage. Configure `OAUTH_SECRET` because new tokens require encryption.
 - Each credential set gets its own Durable Object instance
 - IMAP/SMTP connections use native TLS via cloudflare:sockets
 - Use an **app-specific password** if your provider supports it (Gmail, Outlook, Fastmail, and iCloud all do). To revoke access, disable the app password at your provider.

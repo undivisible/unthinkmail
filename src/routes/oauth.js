@@ -1,13 +1,26 @@
 // OAuth 2.1 endpoints for MCP client compatibility (e.g., Claude.ai)
 // Strategy: access_token = um_ key, so /mcp requires zero changes.
-// Auth codes are HMAC-signed, self-contained — no KV or DO storage needed.
+// Auth codes are HMAC-signed and marked used in DO storage.
 // Requires OAUTH_SECRET env var (set via: wrangler secret put OAUTH_SECRET).
 
 import { encodeKey } from '../lib/crypto.js';
-import { json } from '../index.js';
 import { PRESET_NAMES, PROVIDER_GUIDE_HTML, PROVIDER_PRESETS } from '../provider-content.js';
 
 const enc = new TextEncoder();
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
 
 function b64url(buf) {
   if (typeof buf === 'string') buf = enc.encode(buf);
@@ -57,6 +70,17 @@ function oauthServerError(description) {
   return json({ error: 'server_error', ...(description ? { error_description: description } : {}) }, 500);
 }
 
+function validRedirectUri(uri) {
+  let url;
+  try {
+    url = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (url.protocol === 'https:') return true;
+  return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+}
+
 function requireOAuthSecret(env) {
   const secret = String(env?.OAUTH_SECRET ?? '').trim();
   if (!secret) {
@@ -99,10 +123,11 @@ export async function handleProtectedResourceMeta(request) {
 }
 
 // POST /oauth/register — RFC 7591 dynamic client registration
-// client_id is deterministic (base64url of sorted redirect_uris) — no storage needed.
+// client_id is deterministic (base64url of sorted redirect_uris).
 export async function handleOAuthRegister(request) {
   const body = await request.json().catch(() => ({}));
   const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+  if (!uris.length || !uris.every(validRedirectUri)) return oauthError('invalid_redirect_uri');
   const clientId = b64url(enc.encode(JSON.stringify(uris.sort())));
   console.log('[oauth] register redirect_uris=%j client_id_prefix=%s', uris, clientId.slice(0, 12));
   return json(
@@ -147,19 +172,19 @@ export async function handleOAuthAuthorize(request, env) {
   const clientId = form.get('client_id');
 
   if (!redirectUri) return new Response('Missing redirect_uri', { status: 400 });
+  if (!validRedirectUri(redirectUri)) return new Response('Invalid redirect_uri', { status: 400 });
   if (!codeChallenge) return new Response('Missing code_challenge', { status: 400 });
   if (codeChallengeMethod !== 'S256') return new Response('Unsupported code_challenge_method', { status: 400 });
+  if (!clientId) return new Response('Missing client_id', { status: 400 });
 
   // Validate redirect_uri against registered client
-  if (clientId) {
-    try {
-      const registered = JSON.parse(fromB64url(clientId));
-      if (Array.isArray(registered) && !registered.includes(redirectUri)) {
-        return new Response('redirect_uri not registered for this client', { status: 400 });
-      }
-    } catch {
-      return new Response('Invalid client_id', { status: 400 });
+  try {
+    const registered = JSON.parse(fromB64url(clientId));
+    if (!Array.isArray(registered) || !registered.includes(redirectUri) || !registered.every(validRedirectUri)) {
+      return new Response('redirect_uri not registered for this client', { status: 400 });
     }
+  } catch {
+    return new Response('Invalid client_id', { status: 400 });
   }
 
   const imapHost = form.get('imap_host')?.trim();
@@ -281,6 +306,7 @@ export async function handleOAuthToken(request, env) {
     console.log('[oauth] token: client_id mismatch got=%s want=%s', client_id, data.ci);
     return oauthError('invalid_grant', 'client_id mismatch');
   }
+  if (!data.ci || !client_id || client_id !== data.ci) return oauthError('invalid_grant', 'client_id mismatch');
 
   const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode(code_verifier));
   const challenge = b64url(new Uint8Array(hashBuf));
@@ -289,12 +315,29 @@ export async function handleOAuthToken(request, env) {
     return oauthError('invalid_grant', 'PKCE verification failed');
   }
 
+  if (!(await useOAuthCode(env, payload, data.exp))) return oauthError('invalid_grant', 'Code already used');
+
   console.log('[oauth] token: success issuing access_token');
   return json({
     access_token: data.k,
     token_type: 'bearer',
     scope: 'email',
   });
+}
+
+async function useOAuthCode(env, payload, exp) {
+  if (!env?.IMAP_SESSION) return false;
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(payload));
+  const hash = b64url(new Uint8Array(digest));
+  const id = env.IMAP_SESSION.idFromName('oauth-code-uses');
+  const response = await env.IMAP_SESSION.get(id).fetch(
+    new Request('https://do/oauth-code/use', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash, exp }),
+    }),
+  );
+  return response.ok;
 }
 
 const TAILWIND_CONFIG = `

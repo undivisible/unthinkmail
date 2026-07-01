@@ -44,7 +44,7 @@ async function aesKey(secret) {
 export async function encodeKey(creds, secret) {
   const plain = enc.encode(JSON.stringify(creds));
   const keySecret = usableSecret(secret);
-  if (!keySecret) return TOKEN_PREFIX + b64url(plain);
+  if (!keySecret) throw new Error('OAUTH_SECRET must be at least 32 characters');
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(keySecret), plain);
