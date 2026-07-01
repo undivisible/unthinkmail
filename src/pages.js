@@ -65,6 +65,7 @@ function hub() {
     error: null,
     copied: false,
     showAbout: false,
+    showSetup: false,
 
     // Pre-fill smtp host when imap host changes
     imapHostChanged() {
@@ -133,23 +134,11 @@ const ABOUT_SECTION = `
   <div class="mt-6">
     <button @click="showAbout = !showAbout"
       class="w-full text-xs text-dim border border-border rounded-md py-2 hover:text-sub hover:border-dim transition-colors flex items-center justify-center gap-2">
-      <span x-text="showAbout ? 'hide about + setup guide' : 'about this service + setup guide'"></span>
+      <span x-text="showAbout ? 'hide about this service' : 'about this service'"></span>
       <span x-text="showAbout ? '↑' : '↓'" class="text-muted"></span>
     </button>
 
     <div x-show="showAbout" x-transition class="mt-3 bg-surface border border-border rounded-lg p-5 space-y-4 text-xs text-sub">
-
-      <!-- Setup instructions for all MCP clients (OAuth) -->
-      <div>
-        <p class="text-body text-xs font-medium mb-1">claude.ai, claude desktop, &amp; other mcp clients</p>
-        <p class="text-dim mb-2">all modern mcp clients support oauth — just add this server url:</p>
-        <div class="bg-black rounded-md p-3 mt-2 font-mono">
-          <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span>
-        </div>
-        <p class="text-dim mt-2">your client will automatically open an authorization page where you enter your imap credentials. no manual key needed.</p>
-      </div>
-
-      <div class="border-t border-border"></div>
 
       <div>
         <p class="text-body text-xs font-medium mb-1">what the ai can do</p>
@@ -161,6 +150,28 @@ const ABOUT_SECTION = `
           <li>delete messages</li>
           <li>send and reply to emails</li>
         </ul>
+      </div>
+    </div>
+  </div>`;
+
+const SETUP_SECTION = `
+  <div class="mt-3">
+    <button @click="showSetup = !showSetup"
+      class="w-full text-xs text-dim border border-border rounded-md py-2 hover:text-sub hover:border-dim transition-colors flex items-center justify-center gap-2">
+      <span x-text="showSetup ? 'hide setup guide' : 'setup guide'"></span>
+      <span x-text="showSetup ? '↑' : '↓'" class="text-muted"></span>
+    </button>
+
+    <div x-show="showSetup" x-transition class="mt-3 bg-surface border border-border rounded-lg p-5 space-y-4 text-xs text-sub">
+
+      <!-- Setup instructions for all MCP clients (OAuth) -->
+      <div>
+        <p class="text-body text-xs font-medium mb-1">claude.ai, claude desktop, &amp; other mcp clients</p>
+        <p class="text-dim mb-2">all modern mcp clients support oauth — just add this server url:</p>
+        <div class="bg-black rounded-md p-3 mt-2 font-mono">
+          <span class="text-sub">https://unthinkmail.undivisible.dev/mcp</span>
+        </div>
+        <p class="text-dim mt-2">your client will automatically open an authorization page where you enter your imap credentials. no manual key needed.</p>
       </div>
 
       <div class="border-t border-border"></div>
@@ -310,6 +321,8 @@ export const HUB = `<!DOCTYPE html>
   </div>
 
   ${ABOUT_SECTION}
+
+  ${SETUP_SECTION}
 
   ${FOOTER_LINKS}
 
