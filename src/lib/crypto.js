@@ -17,12 +17,14 @@ function bytesToBinary(bytes) {
 
 const b64url = (buf) =>
   btoa(bytesToBinary(new Uint8Array(buf)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 
 const b64urlDecode = (s) => {
   let b = s.replace(/-/g, '+').replace(/_/g, '/');
   while (b.length % 4) b += '=';
-  return Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  return Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
 };
 
 const enc = new TextEncoder();
@@ -73,5 +75,7 @@ export async function decodeKey(token, secret) {
 // v2: forces new DO instances (fixes stale IMAP code)
 export async function credHash(creds) {
   const h = await crypto.subtle.digest('SHA-256', enc.encode('v2:' + JSON.stringify(creds)));
-  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(new Uint8Array(h))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }

@@ -39,10 +39,10 @@ export async function handleMcp(request, env) {
 
   // MCP clients probe with GET to validate the server URL
   if (request.method === 'GET') {
-    return new Response(
-      JSON.stringify({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' }),
-      { status: 200, headers: { 'Content-Type': 'application/json', ...CORS } }
-    );
+    return new Response(JSON.stringify({ name: 'unthinkmail', version: '1.0.0', protocolVersion: '2024-11-05' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...CORS },
+    });
   }
 
   const body = await request.json().catch(() => null);
@@ -59,11 +59,13 @@ export async function handleMcp(request, env) {
 
   let sessionResponse;
   try {
-    sessionResponse = await stub.fetch(new Request('https://do/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(enrichedBody),
-    }));
+    sessionResponse = await stub.fetch(
+      new Request('https://do/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(enrichedBody),
+      }),
+    );
   } catch (e) {
     console.error('[mcp] session error:', e?.message ?? e);
     return jsonError('Session error: ' + (e?.message ?? 'unknown'), 502);

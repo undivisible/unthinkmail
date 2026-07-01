@@ -8,14 +8,16 @@ function decodeWords(s) {
     try {
       let bytes;
       if (enc.toUpperCase() === 'B') {
-        bytes = Uint8Array.from(atob(text), c => c.charCodeAt(0));
+        bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
       } else {
         // Quoted-printable with _ → space; each decoded char is a raw byte value
         const qp = text.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-        bytes = Uint8Array.from(qp, c => c.charCodeAt(0));
+        bytes = Uint8Array.from(qp, (c) => c.charCodeAt(0));
       }
       return new TextDecoder(charset).decode(bytes);
-    } catch { return text; }
+    } catch {
+      return text;
+    }
   });
 }
 
@@ -56,12 +58,12 @@ function decodeBody(body, cte, charset) {
   const enc = (cte || '7bit').toLowerCase().trim();
   try {
     if (enc === 'base64') {
-      const bytes = Uint8Array.from(atob(body.replace(/\s/g, '')), c => c.charCodeAt(0));
+      const bytes = Uint8Array.from(atob(body.replace(/\s/g, '')), (c) => c.charCodeAt(0));
       return new TextDecoder(charset || 'utf-8').decode(bytes);
     }
     if (enc === 'quoted-printable') {
       const s = body.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-      const bytes = Uint8Array.from(s, c => c.charCodeAt(0));
+      const bytes = Uint8Array.from(s, (c) => c.charCodeAt(0));
       return new TextDecoder(charset || 'utf-8').decode(bytes);
     }
   } catch {}
@@ -115,7 +117,10 @@ function stripHtml(html) {
     .replace(/<\/(?:p|div|tr|li|h[1-6])>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -134,7 +139,8 @@ function parsePart(raw) {
     const boundary = ctParam(ct, 'boundary');
     if (!boundary) return { text: null, html: null, attachments: [] };
     const parts = splitParts(bodyRaw, boundary).map(parsePart);
-    let text = null, html = null;
+    let text = null,
+      html = null;
     const attachments = [];
     for (const p of parts) {
       if (p.text !== null && text === null) text = p.text;
@@ -145,8 +151,7 @@ function parsePart(raw) {
   }
 
   // Treat as attachment if: explicit attachment disposition, or non-text/non-multipart type
-  const isAttachment = cd.toLowerCase().startsWith('attachment') ||
-    (!mimeType.startsWith('text/') && !mimeType.startsWith('message/'));
+  const isAttachment = cd.toLowerCase().startsWith('attachment') || (!mimeType.startsWith('text/') && !mimeType.startsWith('message/'));
 
   if (isAttachment) {
     const name = decodeWords(ctParam(cd, 'filename') || ctParam(ct, 'name') || mimeType.split('/')[1] || 'attachment');
@@ -167,13 +172,13 @@ export function parseMime(raw) {
   const [headerRaw] = splitHeaderBody(raw);
   const h = parseHeaders(headerRaw);
 
-  const from      = decodeWords(h['from'] || '');
-  const to        = decodeWords(h['to'] || '');
-  const subject   = decodeWords(h['subject'] || '');
-  const date      = h['date'] || '';
+  const from = decodeWords(h['from'] || '');
+  const to = decodeWords(h['to'] || '');
+  const subject = decodeWords(h['subject'] || '');
+  const date = h['date'] || '';
   const messageId = h['message-id'] || '';
-  const references  = h['references'] || '';
-  const inReplyTo   = h['in-reply-to'] || '';
+  const references = h['references'] || '';
+  const inReplyTo = h['in-reply-to'] || '';
 
   const { text, html, attachments } = parsePart(raw);
 
@@ -205,9 +210,20 @@ function tokenizeBS(s) {
   let i = 0;
   while (i < s.length) {
     // skip whitespace
-    if (s[i] === ' ' || s[i] === '\t' || s[i] === '\r' || s[i] === '\n') { i++; continue; }
-    if (s[i] === '(') { tokens.push({ t: '(' }); i++; continue; }
-    if (s[i] === ')') { tokens.push({ t: ')' }); i++; continue; }
+    if (s[i] === ' ' || s[i] === '\t' || s[i] === '\r' || s[i] === '\n') {
+      i++;
+      continue;
+    }
+    if (s[i] === '(') {
+      tokens.push({ t: '(' });
+      i++;
+      continue;
+    }
+    if (s[i] === ')') {
+      tokens.push({ t: ')' });
+      i++;
+      continue;
+    }
     if (s[i] === '"') {
       let val = '';
       i++;
@@ -271,11 +287,11 @@ function walkBS(node, partNum) {
   }
 
   // Leaf part
-  const type    = (node[0] || 'application').toLowerCase();
+  const type = (node[0] || 'application').toLowerCase();
   const subtype = (node[1] || 'octet-stream').toLowerCase();
-  const params  = pairsToMap(node[2]);
+  const params = pairsToMap(node[2]);
   const encoding = (node[5] || '7bit').toLowerCase();
-  const size    = parseInt(node[6]) || 0;
+  const size = parseInt(node[6]) || 0;
 
   // Disposition is node[8]: either null/string or ["attachment", ["filename","foo"]]
   let disp = null;
@@ -315,14 +331,12 @@ export function parseBodyStructure(rawFetchResponse) {
 export function decodeBodyRaw(body, cte) {
   const encoding = (cte || '7bit').toLowerCase().trim();
   if (encoding === 'base64') {
-    return Uint8Array.from(atob(body.replace(/\s/g, '')), c => c.charCodeAt(0));
+    return Uint8Array.from(atob(body.replace(/\s/g, '')), (c) => c.charCodeAt(0));
   }
   if (encoding === 'quoted-printable') {
-    const s = body
-      .replace(/=\r?\n/g, '')
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
-    return Uint8Array.from(s, c => c.charCodeAt(0));
+    const s = body.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    return Uint8Array.from(s, (c) => c.charCodeAt(0));
   }
   // 7bit / 8bit — treat as latin-1 bytes
-  return Uint8Array.from(body, c => c.charCodeAt(0));
+  return Uint8Array.from(body, (c) => c.charCodeAt(0));
 }

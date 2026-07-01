@@ -27,7 +27,9 @@ export class ImapClient {
   #authenticated = false;
   #selectedFolder = null;
 
-  isConnected() { return this.#authenticated; }
+  isConnected() {
+    return this.#authenticated;
+  }
 
   async connect(host, port, user, pass) {
     this.#socket = connect({ hostname: host, port }, { secureTransport: 'on' });
@@ -51,9 +53,15 @@ export class ImapClient {
   async close() {
     this.#authenticated = false;
     this.#selectedFolder = null;
-    try { await this.#write(`${this.#tag()} LOGOUT\r\n`); } catch {}
-    try { await this.#writer?.close(); } catch {}
-    try { this.#reader?.cancel(); } catch {}
+    try {
+      await this.#write(`${this.#tag()} LOGOUT\r\n`);
+    } catch {}
+    try {
+      await this.#writer?.close();
+    } catch {}
+    try {
+      this.#reader?.cancel();
+    } catch {}
   }
 
   async listFolders() {
@@ -102,10 +110,7 @@ export class ImapClient {
   async fetchHeaders(folder, uid) {
     await this.#selectIfNeeded(folder);
     const safeUid = validateUid(uid);
-    const raw = await this.#fetchLiteral(
-      safeUid,
-      'BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO SUBJECT MESSAGE-ID REFERENCES IN-REPLY-TO DATE TO)]'
-    );
+    const raw = await this.#fetchLiteral(safeUid, 'BODY.PEEK[HEADER.FIELDS (FROM REPLY-TO SUBJECT MESSAGE-ID REFERENCES IN-REPLY-TO DATE TO)]');
     if (raw === null) return {};
 
     const map = {};
@@ -118,14 +123,14 @@ export class ImapClient {
       if (!map[key]) map[key] = val;
     }
     return {
-      from:       map['from'] || '',
-      replyTo:    map['reply-to'] || '',
-      subject:    map['subject'] || '',
-      messageId:  map['message-id'] || '',
+      from: map['from'] || '',
+      replyTo: map['reply-to'] || '',
+      subject: map['subject'] || '',
+      messageId: map['message-id'] || '',
       references: map['references'] || '',
-      inReplyTo:  map['in-reply-to'] || '',
-      date:       map['date'] || '',
-      to:         map['to'] || '',
+      inReplyTo: map['in-reply-to'] || '',
+      date: map['date'] || '',
+      to: map['to'] || '',
     };
   }
 
@@ -235,9 +240,9 @@ export class ImapClient {
         const key = parts[i].toLowerCase();
         const val = parseInt(parts[i + 1]) || 0;
         if (key === 'messages') result.messages = val;
-        if (key === 'unseen')   result.unseen   = val;
-        if (key === 'recent')   result.recent   = val;
-        if (key === 'uidnext')  result.uidNext  = val;
+        if (key === 'unseen') result.unseen = val;
+        if (key === 'recent') result.recent = val;
+        if (key === 'uidnext') result.uidNext = val;
       }
     }
     return result;
@@ -251,13 +256,13 @@ export class ImapClient {
     const result = { uid: safeUid, flags: [], seen: false, flagged: false, size: 0 };
     for (const line of resp.split('\n')) {
       if (!line.startsWith('* ')) continue;
-      const uidM   = line.match(/\bUID (\d+)/i);
+      const uidM = line.match(/\bUID (\d+)/i);
       if (uidM) result.uid = uidM[1];
       const flagsM = line.match(/\bFLAGS \(([^)]*)\)/i);
       if (flagsM) {
-        result.flags   = flagsM[1].trim().split(/\s+/).filter(Boolean);
-        result.seen    = result.flags.some(f => f.toLowerCase() === '\\seen');
-        result.flagged = result.flags.some(f => f.toLowerCase() === '\\flagged');
+        result.flags = flagsM[1].trim().split(/\s+/).filter(Boolean);
+        result.seen = result.flags.some((f) => f.toLowerCase() === '\\seen');
+        result.flagged = result.flags.some((f) => f.toLowerCase() === '\\flagged');
       }
       const sizeM = line.match(/\bRFC822\.SIZE (\d+)/i);
       if (sizeM) result.size = parseInt(sizeM[1]);
@@ -269,7 +274,7 @@ export class ImapClient {
   async fetchMultiple(folder, uids) {
     if (!uids || uids.length === 0) return [];
     await this.#selectIfNeeded(folder);
-    const uidSeq = uids.map(u => validateUid(u)).join(',');
+    const uidSeq = uids.map((u) => validateUid(u)).join(',');
 
     const tag = this.#tag();
     await this.#write(`${tag} UID FETCH ${uidSeq} (UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID)])\r\n`);
@@ -356,9 +361,13 @@ export class ImapClient {
 
   // --- internals ---
 
-  #tag() { return `T${++this.#tagCounter}`; }
+  #tag() {
+    return `T${++this.#tagCounter}`;
+  }
 
-  async #write(s) { await this.#writer.write(enc.encode(s)); }
+  async #write(s) {
+    await this.#writer.write(enc.encode(s));
+  }
 
   // Select a folder only if it isn't already selected — avoids redundant round-trips
   async #selectIfNeeded(folder) {
@@ -397,7 +406,10 @@ export class ImapClient {
     }
     const buf = new Uint8Array(this.#bufLen);
     let off = 0;
-    for (const c of this.#chunks) { buf.set(c, off); off += c.length; }
+    for (const c of this.#chunks) {
+      buf.set(c, off);
+      off += c.length;
+    }
     this.#chunks = [];
     this.#bufLen = 0;
     return buf;
@@ -414,7 +426,10 @@ export class ImapClient {
           const pos = scanned + nl;
           const line = dec.decode(flat.subarray(0, pos + 1)).replace(/\r?\n$/, '');
           const rest = flat.subarray(pos + 1);
-          if (rest.length) { this.#chunks = [rest]; this.#bufLen = rest.length; }
+          if (rest.length) {
+            this.#chunks = [rest];
+            this.#bufLen = rest.length;
+          }
           return line;
         }
         scanned += chunk.length;
@@ -451,7 +466,10 @@ export class ImapClient {
     const flat = this.#flatten();
     const chunk = flat.subarray(0, n);
     const rest = flat.subarray(n);
-    if (rest.length) { this.#chunks = [rest]; this.#bufLen = rest.length; }
+    if (rest.length) {
+      this.#chunks = [rest];
+      this.#bufLen = rest.length;
+    }
     return chunk;
   }
 

@@ -1,12 +1,17 @@
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_TOTAL_ATTACHMENT_BYTES } from './outbound-mime.js';
 
-const headerStr = (s) => String(s ?? '').replace(/[\r\n]/g, '').trim();
+const headerStr = (s) =>
+  String(s ?? '')
+    .replace(/[\r\n]/g, '')
+    .trim();
 
 const filenameFromDisposition = (value) => {
   const s = String(value || '');
   const star = s.match(/filename\*\s*=\s*(?:UTF-8''|)([^;]+)/i);
   if (star) {
-    try { return decodeURIComponent(star[1].trim().replace(/^"|"$/g, '')); } catch {}
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ''));
+    } catch {}
   }
   const quoted = s.match(/filename\s*=\s*"([^"]+)"/i);
   if (quoted) return quoted[1];
@@ -62,13 +67,15 @@ export async function fetchUrlAttachments(urlAttachments, fetcher = fetch) {
     }
     const length = parseInt(response.headers.get('content-length') || '0', 10);
     if (length > MAX_ATTACHMENT_BYTES) throw new Error(`Attachment exceeds ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB limit: ${url.href}`);
-    if (length && total + length > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error(`Total attachment size exceeds ${MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`);
+    if (length && total + length > MAX_TOTAL_ATTACHMENT_BYTES)
+      throw new Error(`Total attachment size exceeds ${MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`);
     const bytes = await readBytes(response, MAX_ATTACHMENT_BYTES);
     total += bytes.length;
     if (total > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error(`Total attachment size exceeds ${MAX_TOTAL_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`);
     attachments.push({
       filename: headerStr(source.filename) || filenameFromDisposition(response.headers.get('content-disposition')) || filenameFromUrl(url),
-      mimeType: headerStr(source.mimeType || source.type) || headerStr((response.headers.get('content-type') || '').split(';')[0]) || 'application/octet-stream',
+      mimeType:
+        headerStr(source.mimeType || source.type) || headerStr((response.headers.get('content-type') || '').split(';')[0]) || 'application/octet-stream',
       bytes,
       contentId: source.contentId,
       inline: source.inline,
