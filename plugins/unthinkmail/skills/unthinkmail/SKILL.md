@@ -31,7 +31,7 @@ Use `sendemail`, `replyemail`, or `sendemailfromurls` only after the user approv
 
 For hosted files, prefer `sendemailfromurls` or `attachmentUrls` with public HTTPS URLs.
 
-For local files, do not paste file bytes into chat. Use the repo examples or another local conversion path so file content stays local until the MCP request is made.
+For local files, do not paste file bytes into chat. Use a local conversion path so file content stays local until the MCP request is made.
 
 ## Reference
 

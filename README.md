@@ -83,27 +83,7 @@ Example MCP arguments for hosted files:
 }
 ```
 
-Example script:
-
-```bash
-UNTHINKMAIL_KEY="um_..." \
-TO="person@example.com" \
-ATTACHMENT_URL="https://example.com/report.pdf" \
-ATTACHMENT_FILENAME="report.pdf" \
-ATTACHMENT_MIME_TYPE="application/pdf" \
-bun examples/send-hosted-attachment.mjs
-```
-
-For local files, the hosted Worker cannot read local paths. Use a local script so the file bytes stay out of the chat transcript:
-
-```bash
-UNTHINKMAIL_KEY="um_..." \
-TO="person@example.com" \
-ATTACHMENT_FILE="./report.pdf" \
-ATTACHMENT_FILENAME="report.pdf" \
-ATTACHMENT_MIME_TYPE="application/pdf" \
-bun examples/send-local-attachment.mjs
-```
+For local files, the hosted Worker cannot read local paths. Use a local script so the file bytes stay out of the chat transcript.
 
 For inline hosted images:
 
