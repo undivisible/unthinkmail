@@ -12,6 +12,13 @@ const b64url = (buf) =>
 
 const challengeFor = async (verifier) => b64url(await crypto.subtle.digest('SHA-256', enc.encode(verifier)));
 
+async function signedCode(data, signingSecret = secret) {
+  const payload = b64url(enc.encode(JSON.stringify(data)));
+  const key = await crypto.subtle.importKey('raw', enc.encode(signingSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = b64url(await crypto.subtle.sign('HMAC', key, enc.encode(payload)));
+  return `${payload}.${sig}`;
+}
+
 const envWithCodeStore = () => {
   const used = new Set();
   return {
@@ -114,4 +121,70 @@ test('OAuth authorization codes can only be exchanged once', async () => {
   const replay = await exchange({ code, verifier, redirectUri, clientId, env });
   expect(replay.status).toBe(400);
   expect(await replay.json()).toEqual({ error: 'invalid_grant', error_description: 'Code already used' });
+});
+
+test('OAuth token rejects PKCE, redirect URI, and client ID mismatches', async () => {
+  const redirectUri = 'https://client.example/callback';
+  const verifier = 'correct horse battery staple';
+  const { client_id: clientId } = await registerClient(redirectUri);
+  const authResponse = await authorize({
+    redirectUri,
+    clientId,
+    challenge: await challengeFor(verifier),
+  });
+  const code = new URL(authResponse.headers.get('location')).searchParams.get('code');
+
+  expect((await exchange({ code, verifier: 'wrong verifier', redirectUri, clientId, env: envWithCodeStore() })).status).toBe(400);
+  expect((await exchange({ code, verifier, redirectUri: 'https://other.example/callback', clientId, env: envWithCodeStore() })).status).toBe(400);
+  expect((await exchange({ code, verifier, redirectUri, clientId: 'other-client', env: envWithCodeStore() })).status).toBe(400);
+});
+
+test('OAuth token rejects expired authorization codes', async () => {
+  const redirectUri = 'https://client.example/callback';
+  const verifier = 'correct horse battery staple';
+  const { client_id: clientId } = await registerClient(redirectUri);
+  const code = await signedCode({
+    k: 'um_unused',
+    cc: await challengeFor(verifier),
+    ru: redirectUri,
+    ci: clientId,
+    exp: Date.now() - 1000,
+  });
+
+  const response = await exchange({ code, verifier, redirectUri, clientId, env: envWithCodeStore() });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'invalid_grant', error_description: 'Code expired' });
+});
+
+test('OAuth authorize and token fail closed without a strong secret', async () => {
+  const redirectUri = 'https://client.example/callback';
+  const verifier = 'correct horse battery staple';
+  const { client_id: clientId } = await registerClient(redirectUri);
+
+  const form = new FormData();
+  form.set('redirect_uri', redirectUri);
+  form.set('client_id', clientId);
+  form.set('code_challenge', await challengeFor(verifier));
+  form.set('code_challenge_method', 'S256');
+  form.set('imap_host', 'imap.example.com');
+  form.set('imap_user', 'me@example.com');
+  form.set('imap_pass', 'password');
+
+  const authorizeResponse = await handleOAuthAuthorize(
+    new Request('https://unthinkmail.test/oauth/authorize', {
+      method: 'POST',
+      body: form,
+    }),
+    { OAUTH_SECRET: 'short' },
+  );
+  expect(authorizeResponse.status).toBe(500);
+
+  const tokenResponse = await exchange({
+    code: await signedCode({ k: 'um_unused', cc: await challengeFor(verifier), ru: redirectUri, ci: clientId, exp: Date.now() + 1000 }),
+    verifier,
+    redirectUri,
+    clientId,
+    env: { ...envWithCodeStore(), OAUTH_SECRET: '' },
+  });
+  expect(tokenResponse.status).toBe(500);
 });

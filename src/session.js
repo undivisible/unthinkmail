@@ -320,6 +320,7 @@ const TOOLS = [
   {
     name: 'deletemessage',
     description: 'Permanently delete a message by UID',
+    annotations: { destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -463,6 +464,7 @@ const TOOLS = [
   {
     name: 'bulkaction',
     description: 'Apply an action to multiple messages at once. Supports mark read/unread/flag/unflag, delete, and move. Maximum 100 UIDs per call.',
+    annotations: { destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -535,6 +537,7 @@ const TOOLS = [
   {
     name: 'deletefolder',
     description: 'Permanently delete a mail folder and all its messages',
+    annotations: { destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -603,6 +606,7 @@ const TOOLS = [
   {
     name: 'senddraft',
     description: 'Send a saved draft: fetches its raw MIME content by UID, sends via SMTP, then deletes the draft.',
+    annotations: { destructiveHint: true },
     inputSchema: {
       type: 'object',
       properties: {

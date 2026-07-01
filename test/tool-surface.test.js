@@ -21,3 +21,13 @@ test('MCP tool schemas avoid composition keywords for Anthropic compatibility', 
   expect(sessionSource).not.toContain('oneOf');
   expect(sessionSource).not.toContain('allOf');
 });
+
+test('destructive MCP tools carry destructive annotations', async () => {
+  const sessionSource = await Bun.file('src/session.js').text();
+
+  for (const tool of ['deletemessage', 'bulkaction', 'deletefolder', 'senddraft']) {
+    const start = sessionSource.indexOf(`name: '${tool}'`);
+    const end = sessionSource.indexOf('inputSchema:', start);
+    expect(sessionSource.slice(start, end)).toContain('destructiveHint: true');
+  }
+});
